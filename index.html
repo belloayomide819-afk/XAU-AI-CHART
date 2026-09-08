@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XAU AI Chart</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #0b0f14;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+
+    .header {
+      padding: 16px;
+      background: #111821;
+      border-bottom: 1px solid #26303b;
+    }
+
+    .title {
+      font-size: 22px;
+      font-weight: bold;
+    }
+
+    .subtitle {
+      margin-top: 5px;
+      color: #8f9baa;
+      font-size: 13px;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      padding: 12px;
+    }
+
+    .card {
+      background: #111821;
+      border: 1px solid #26303b;
+      border-radius: 12px;
+      padding: 14px;
+    }
+
+    .label {
+      color: #8f9baa;
+      font-size: 12px;
+      margin-bottom: 7px;
+    }
+
+    .value {
+      font-size: 20px;
+      font-weight: bold;
+    }
+
+    .waiting {
+      color: #ffd166;
+    }
+
+    .chart {
+      margin: 0 12px 12px;
+      height: 600px;
+      border: 1px solid #26303b;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #0b0f14;
+    }
+
+    .rules {
+      margin: 0 12px 20px;
+      padding: 14px;
+      background: #111821;
+      border: 1px solid #26303b;
+      border-radius: 12px;
+    }
+
+    .rules h3 {
+      margin-top: 0;
+    }
+
+    .rules div {
+      padding: 6px 0;
+      color: #b8c1cc;
+      font-size: 14px;
+    }
+
+    @media (min-width: 700px) {
+      .dashboard {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="header">
+    <div class="title">XAU AI CHART</div>
+    <div class="subtitle">
+      XAUUSD • M5 • Non-Repainting Signal System
+    </div>
+  </div>
+
+  <div class="dashboard">
+
+    <div class="card">
+      <div class="label">MARKET</div>
+      <div class="value">XAUUSD</div>
+    </div>
+
+    <div class="card">
+      <div class="label">TIMEFRAME</div>
+      <div class="value">M5</div>
+    </div>
+
+    <div class="card">
+      <div class="label">SIGNAL</div>
+      <div class="value waiting">WAITING</div>
+    </div>
+
+    <div class="card">
+      <div class="label">STATUS</div>
+      <div class="value">SCANNING</div>
+    </div>
+
+  </div>
+
+  <div class="chart">
+
+    <div class="tradingview-widget-container" style="height:100%;width:100%">
+      <div class="tradingview-widget-container__widget"
+           style="height:calc(100% - 32px);width:100%">
+      </div>
+
+      <script
+        type="text/javascript"
+        src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
+        async>
+
+        {
+          "autosize": true,
+          "symbol": "OANDA:XAUUSD",
+          "interval": "5",
+          "timezone": "Africa/Lagos",
+          "theme": "dark",
+          "style": "1",
+          "locale": "en",
+          "allow_symbol_change": false,
+          "hide_top_toolbar": false,
+          "hide_legend": false,
+          "save_image": false,
+          "calendar": false,
+          "support_host": "https://www.tradingview.com"
+        }
+
+      </script>
+    </div>
+
+  </div>
+
+  <div class="rules">
+
+    <h3>AI Signal Engine</h3>
+
+    <div>✓ Liquidity Sweep Detection</div>
+    <div>✓ BOS / CHoCH Confirmation</div>
+    <div>✓ EMA Trend Filter</div>
+    <div>✓ VWAP Confirmation</div>
+    <div>✓ Momentum Filter</div>
+    <div>✓ ATR Volatility Filter</div>
+    <div>✓ Risk / Reward Check</div>
+    <div>✓ Candle-Close Confirmation</div>
+    <div>✓ Non-Repainting Signal Logic</div>
+
+  </div>
+
+</body>
+</html>
