@@ -150,6 +150,13 @@
       font-size: 18px;
     }
 
+    .engine-info {
+      color: #7f899b;
+      font-size: 12px;
+      margin-bottom: 14px;
+      line-height: 1.5;
+    }
+
     .checks {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
@@ -234,6 +241,7 @@
 <div class="container">
 
   <h1>XAU AI CHART</h1>
+
   <div class="subtitle">
     XAUUSD • M5 • Non-Repainting Signal System
   </div>
@@ -257,14 +265,19 @@
 
     <div class="card">
       <div class="label">STATUS</div>
-      <div class="value yellow" id="status">SCANNING</div>
+      <div class="value yellow" id="status">
+        SCANNING
+      </div>
     </div>
 
   </div>
 
+
   <div class="signal-box">
 
-    <div class="signal-title">CURRENT SIGNAL</div>
+    <div class="signal-title">
+      CURRENT SIGNAL
+    </div>
 
     <div id="signal" class="signal yellow">
       WAITING
@@ -291,17 +304,26 @@
 
   </div>
 
+
   <div class="chart">
+
     <iframe
       src="https://www.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=OANDA%3AXAUUSD&interval=5&hidesidetoolbar=1&hidetoptoolbar=1&symboledit=0&saveimage=0&toolbarbg=f1f3f6&studies=%5B%5D&theme=dark&style=1&timezone=Africa%2FLagos&withdateranges=1&hideideas=1&hidelegend=0&enable_publishing=false"
       allowtransparency="true"
       scrolling="no">
     </iframe>
+
   </div>
+
 
   <div class="engine">
 
     <h2>Signal Engine</h2>
+
+    <div class="engine-info">
+      Core setup: Liquidity Sweep + BOS / CHoCH + EMA Trend +
+      2 of 3 confirmations. Signals are confirmed only on closed M5 candles.
+    </div>
 
     <div class="checks">
 
@@ -345,8 +367,10 @@
 
   </div>
 
+
   <div class="footer">
-    XAU AI CHART scans closed M5 candles only. Signals are rule-based and do not guarantee trading results.
+    XAU AI CHART scans closed M5 candles only.
+    Signals are rule-based and do not guarantee trading results.
   </div>
 
 </div>
@@ -354,25 +378,31 @@
 
 <script>
 
-const API_BASE = "";
-
-let lastSignalKey = "";
-let lastClosedCandleTime = "";
-
 const REFRESH_MS = 15000;
 
-const MIN_CANDLES = 60;
-const EMA_FAST = 20;
-const EMA_SLOW = 50;
-const ATR_PERIOD = 14;
-const LOOKBACK = 10;
+let lastSignalKey = "";
 
-const RR_TARGET = 2.5;
-const ATR_SL_MULTIPLIER = 1.15;
 
+/* -----------------------------------------
+   BASIC HELPERS
+----------------------------------------- */
 
 function $(id) {
   return document.getElementById(id);
+}
+
+
+function formatPrice(value) {
+
+  if (
+    value === null ||
+    value === undefined ||
+    !Number.isFinite(Number(value))
+  ) {
+    return "---";
+  }
+
+  return Number(value).toFixed(2);
 }
 
 
@@ -382,462 +412,20 @@ function setCheck(id, text, state) {
 
   element.textContent = text;
 
-  element.className = "check " + state;
+  element.className =
+    "check " + state;
 }
 
 
-function formatPrice(value) {
-
-  if (!Number.isFinite(value)) {
-    return "---";
-  }
-
-  return Number(value).toFixed(2);
-}
-
-
-function calculateEMA(values, period) {
-
-  if (values.length < period) {
-    return [];
-  }
-
-  const result = new Array(values.length).fill(null);
-
-  let sum = 0;
-
-  for (let i = 0; i < period; i++) {
-    sum += values[i];
-  }
-
-  result[period - 1] = sum / period;
-
-  const multiplier = 2 / (period + 1);
-
-  for (let i = period; i < values.length; i++) {
-
-    result[i] =
-      (values[i] - result[i - 1]) * multiplier +
-      result[i - 1];
-  }
-
-  return result;
-}
-
-
-function calculateATR(candles, period) {
-
-  if (candles.length < period + 1) {
-    return [];
-  }
-
-  const tr = new Array(candles.length).fill(null);
-
-  tr[0] = candles[0].high - candles[0].low;
-
-  for (let i = 1; i < candles.length; i++) {
-
-    const current = candles[i];
-    const previous = candles[i - 1];
-
-    const range1 = current.high - current.low;
-    const range2 = Math.abs(current.high - previous.close);
-    const range3 = Math.abs(current.low - previous.close);
-
-    tr[i] = Math.max(range1, range2, range3);
-  }
-
-  const atr = new Array(candles.length).fill(null);
-
-  let initial = 0;
-
-  for (let i = 0; i < period; i++) {
-    initial += tr[i];
-  }
-
-  atr[period - 1] = initial / period;
-
-  for (let i = period; i < candles.length; i++) {
-
-    atr[i] =
-      ((atr[i - 1] * (period - 1)) + tr[i]) / period;
-  }
-
-  return atr;
-}
-
-
-/*
-  Twelve Data response does not provide usable volume for this XAU/USD feed.
-  Therefore this is a price-weighted VWAP proxy rather than exchange-volume VWAP.
-*/
-function calculateVWAP(candles) {
-
-  let cumulativePrice = 0;
-  let cumulativeWeight = 0;
-
-  const result = [];
-
-  for (const candle of candles) {
-
-    const typical =
-      (candle.high + candle.low + candle.close) / 3;
-
-    cumulativePrice += typical;
-    cumulativeWeight += 1;
-
-    result.push(cumulativePrice / cumulativeWeight);
-  }
-
-  return result;
-}
-
-
-function candleIsBullish(candle) {
-  return candle.close > candle.open;
-}
-
-
-function candleIsBearish(candle) {
-  return candle.close < candle.open;
-}
-
-
-function bodySize(candle) {
-  return Math.abs(candle.close - candle.open);
-}
-
-
-function detectLiquiditySweep(candles, index) {
-
-  if (index < LOOKBACK + 1) {
-    return {
-      buy: false,
-      sell: false
-    };
-  }
-
-  const current = candles[index];
-
-  let previousLow = Infinity;
-  let previousHigh = -Infinity;
-
-  for (
-    let i = index - LOOKBACK;
-    i < index;
-    i++
-  ) {
-
-    previousLow = Math.min(previousLow, candles[i].low);
-    previousHigh = Math.max(previousHigh, candles[i].high);
-  }
-
-  const buySweep =
-    current.low < previousLow &&
-    current.close > previousLow &&
-    candleIsBullish(current);
-
-  const sellSweep =
-    current.high > previousHigh &&
-    current.close < previousHigh &&
-    candleIsBearish(current);
-
-  return {
-    buy: buySweep,
-    sell: sellSweep
-  };
-}
-
-
-function detectStructure(candles, index) {
-
-  if (index < 6) {
-    return {
-      buy: false,
-      sell: false
-    };
-  }
-
-  const current = candles[index];
-
-  let recentHigh = -Infinity;
-  let recentLow = Infinity;
-
-  for (
-    let i = index - 5;
-    i < index;
-    i++
-  ) {
-
-    recentHigh = Math.max(recentHigh, candles[i].high);
-    recentLow = Math.min(recentLow, candles[i].low);
-  }
-
-  const bullishBreak =
-    current.close > recentHigh;
-
-  const bearishBreak =
-    current.close < recentLow;
-
-  return {
-    buy: bullishBreak,
-    sell: bearishBreak
-  };
-}
-
-
-function detectMomentum(candles, index, atr) {
-
-  const current = candles[index];
-
-  const previous = candles[index - 1];
-
-  if (!atr[index]) {
-    return {
-      buy: false,
-      sell: false
-    };
-  }
-
-  const body = bodySize(current);
-
-  const strongBody =
-    body >= atr[index] * 0.20;
-
-  const bullish =
-    strongBody &&
-    candleIsBullish(current) &&
-    current.close > previous.close;
-
-  const bearish =
-    strongBody &&
-    candleIsBearish(current) &&
-    current.close < previous.close;
-
-  return {
-    buy: bullish,
-    sell: bearish
-  };
-}
-
-
-function calculateSignal(candles) {
-
-  if (candles.length < MIN_CANDLES) {
-    return {
-      signal: "WAITING"
-    };
-  }
-
-  /*
-    The final candle returned by the API can still be forming.
-    We deliberately ignore it.
-
-    This is the main non-repainting protection.
-  */
-  const index = candles.length - 2;
-
-  const current = candles[index];
-
-  const closes = candles.map(c => c.close);
-
-  const ema20 = calculateEMA(closes, EMA_FAST);
-  const ema50 = calculateEMA(closes, EMA_SLOW);
-
-  const atr = calculateATR(candles, ATR_PERIOD);
-
-  const vwap = calculateVWAP(candles);
-
-  if (
-    !ema20[index] ||
-    !ema50[index] ||
-    !atr[index] ||
-    !vwap[index]
-  ) {
-
-    return {
-      signal: "WAITING"
-    };
-  }
-
-  const sweep =
-    detectLiquiditySweep(candles, index);
-
-  const structure =
-    detectStructure(candles, index);
-
-  const momentum =
-    detectMomentum(candles, index, atr);
-
-  const bullishTrend =
-    ema20[index] > ema50[index];
-
-  const bearishTrend =
-    ema20[index] < ema50[index];
-
-  const aboveVWAP =
-    current.close > vwap[index];
-
-  const belowVWAP =
-    current.close < vwap[index];
-
-  const atrValue =
-    atr[index];
-
-  const volatilityOK =
-    atrValue > 0.30;
-
-  const buyConditions = [
-
-    sweep.buy,
-    structure.buy,
-    bullishTrend,
-    aboveVWAP,
-    momentum.buy,
-    volatilityOK
-
-  ];
-
-  const sellConditions = [
-
-    sweep.sell,
-    structure.sell,
-    bearishTrend,
-    belowVWAP,
-    momentum.sell,
-    volatilityOK
-
-  ];
-
-  const buyScore =
-    buyConditions.filter(Boolean).length;
-
-  const sellScore =
-    sellConditions.filter(Boolean).length;
-
-
-  /*
-    We require strong confirmation.
-
-    A signal needs:
-    - liquidity sweep
-    - structure break
-    - trend
-    - VWAP
-    - momentum
-    - acceptable volatility
-
-    This intentionally produces fewer signals rather than
-    firing repeatedly on every candle.
-  */
-
-  let direction = "WAITING";
-
-  if (buyScore >= 5 && sweep.buy && structure.buy) {
-    direction = "BUY";
-  }
-
-  if (sellScore >= 5 && sweep.sell && structure.sell) {
-    direction = "SELL";
-  }
-
-
-  const entry =
-    current.close;
-
-  let sl = null;
-  let tp = null;
-
-  if (direction === "BUY") {
-
-    const swingLow =
-      Math.min(
-        ...candles
-          .slice(index - LOOKBACK, index + 1)
-          .map(c => c.low)
-      );
-
-    sl =
-      Math.min(
-        swingLow,
-        entry - atrValue * ATR_SL_MULTIPLIER
-      );
-
-    const risk =
-      entry - sl;
-
-    tp =
-      entry + risk * RR_TARGET;
-  }
-
-
-  if (direction === "SELL") {
-
-    const swingHigh =
-      Math.max(
-        ...candles
-          .slice(index - LOOKBACK, index + 1)
-          .map(c => c.high)
-      );
-
-    sl =
-      Math.max(
-        swingHigh,
-        entry + atrValue * ATR_SL_MULTIPLIER
-      );
-
-    const risk =
-      sl - entry;
-
-    tp =
-      entry - risk * RR_TARGET;
-  }
-
-
-  return {
-
-    signal: direction,
-
-    entry,
-    sl,
-    tp,
-
-    candleTime: current.time,
-
-    ema20: ema20[index],
-    ema50: ema50[index],
-
-    vwap: vwap[index],
-    atr: atrValue,
-
-    sweepBuy: sweep.buy,
-    sweepSell: sweep.sell,
-
-    structureBuy: structure.buy,
-    structureSell: structure.sell,
-
-    momentumBuy: momentum.buy,
-    momentumSell: momentum.sell,
-
-    bullishTrend,
-    bearishTrend,
-
-    aboveVWAP,
-    belowVWAP,
-
-    volatilityOK,
-
-    buyScore,
-    sellScore
-  };
-}
-
-
-async function getGoldPrice() {
+/* -----------------------------------------
+   PRICE
+----------------------------------------- */
+
+async function loadPrice() {
 
   const response =
     await fetch(
-      API_BASE + "/api/gold",
+      "/api/gold",
       {
         cache: "no-store"
       }
@@ -848,19 +436,37 @@ async function getGoldPrice() {
 
   if (!data.ok) {
     throw new Error(
-      data.error || "Gold price unavailable"
+      data.error ||
+      "Unable to load gold price"
     );
   }
 
-  return data;
+  $("price").textContent =
+    formatPrice(data.price);
 }
 
 
-async function getCandles() {
+/* -----------------------------------------
+   SIGNAL
+-----------------------------------------
+
+   IMPORTANT:
+
+   We DO NOT calculate another strategy
+   inside the browser.
+
+   The Worker is the single source of truth.
+
+   /api/scan uses the exact same engine
+   that the Cloudflare cron uses for Telegram.
+
+----------------------------------------- */
+
+async function loadSignal() {
 
   const response =
     await fetch(
-      API_BASE + "/api/candles",
+      "/api/scan",
       {
         cache: "no-store"
       }
@@ -870,136 +476,208 @@ async function getCandles() {
     await response.json();
 
   if (!data.ok) {
+
     throw new Error(
-      data.error || "M5 candles unavailable"
+      data.error ||
+      "Signal engine unavailable"
     );
   }
 
-  return data.candles || [];
+  return data.signal;
 }
 
+
+/* -----------------------------------------
+   DISPLAY SIGNAL
+----------------------------------------- */
 
 function displaySignal(result) {
 
-  const signalElement =
-    $("signal");
+  const signal =
+    result?.signal || "WAITING";
 
-  const statusElement =
-    $("status");
 
-  if (result.signal === "BUY") {
+  if (signal === "BUY") {
 
-    signalElement.textContent = "BUY";
+    $("signal").textContent =
+      "BUY";
 
-    signalElement.className =
+    $("signal").className =
       "signal green";
 
-    statusElement.textContent =
+    $("status").textContent =
       "BUY SIGNAL";
 
-    statusElement.className =
+    $("status").className =
       "value green";
 
     $("entry").textContent =
       formatPrice(result.entry);
 
     $("sl").textContent =
-      formatPrice(result.sl);
+      formatPrice(result.stopLoss);
 
     $("tp").textContent =
-      formatPrice(result.tp);
+      formatPrice(result.takeProfit);
 
+    return;
   }
 
-  else if (result.signal === "SELL") {
 
-    signalElement.textContent = "SELL";
+  if (signal === "SELL") {
 
-    signalElement.className =
+    $("signal").textContent =
+      "SELL";
+
+    $("signal").className =
       "signal red";
 
-    statusElement.textContent =
+    $("status").textContent =
       "SELL SIGNAL";
 
-    statusElement.className =
+    $("status").className =
       "value red";
 
     $("entry").textContent =
       formatPrice(result.entry);
 
     $("sl").textContent =
-      formatPrice(result.sl);
+      formatPrice(result.stopLoss);
 
     $("tp").textContent =
-      formatPrice(result.tp);
+      formatPrice(result.takeProfit);
 
+    return;
   }
 
-  else {
 
-    signalElement.textContent =
-      "WAITING";
+  $("signal").textContent =
+    "WAITING";
 
-    signalElement.className =
-      "signal yellow";
+  $("signal").className =
+    "signal yellow";
 
-    statusElement.textContent =
-      "SCANNING";
+  $("status").textContent =
+    "SCANNING";
 
-    statusElement.className =
-      "value yellow";
+  $("status").className =
+    "value yellow";
 
-    $("entry").textContent =
-      "---";
+  $("entry").textContent =
+    "---";
 
-    $("sl").textContent =
-      "---";
+  $("sl").textContent =
+    "---";
 
-    $("tp").textContent =
-      "---";
-  }
+  $("tp").textContent =
+    "---";
 }
 
 
+/* -----------------------------------------
+   DISPLAY ENGINE CHECKS
+----------------------------------------- */
+
 function displayChecks(result) {
 
-  if (!result || result.signal === "WAITING") {
+  const checks =
+    result?.checks || {};
+
+
+  /*
+    WAITING state
+
+    We still display the real individual
+    conditions returned by the Worker.
+  */
+
+  if (
+    result?.signal === "WAITING"
+  ) {
 
     setCheck(
       "sweep",
-      "Liquidity Sweep — WAIT",
-      "wait"
+      "Liquidity Sweep — " +
+        (
+          checks.liquiditySweep
+            ? "CONFIRMED"
+            : "WAIT"
+        ),
+      checks.liquiditySweep
+        ? "ok"
+        : "wait"
     );
+
 
     setCheck(
       "structure",
-      "BOS / CHoCH — WAIT",
-      "wait"
+      "BOS / CHoCH — " +
+        (
+          checks.structure
+            ? "CONFIRMED"
+            : "WAIT"
+        ),
+      checks.structure
+        ? "ok"
+        : "wait"
     );
+
 
     setCheck(
       "ema",
-      "EMA 20/50 — WAIT",
-      "wait"
+      "EMA 20/50 — " +
+        (
+          checks.ema
+            ? "CONFIRMED"
+            : "WAIT"
+        ),
+      checks.ema
+        ? "ok"
+        : "wait"
     );
+
 
     setCheck(
       "vwap",
-      "VWAP — WAIT",
-      "wait"
+      "VWAP — " +
+        (
+          checks.vwap
+            ? "CONFIRMED"
+            : "WAIT"
+        ),
+      checks.vwap
+        ? "ok"
+        : "wait"
     );
+
 
     setCheck(
       "momentum",
-      "Momentum — WAIT",
-      "wait"
+      "Momentum — " +
+        (
+          checks.momentum
+            ? "CONFIRMED"
+            : "WAIT"
+        ),
+      checks.momentum
+        ? "ok"
+        : "wait"
     );
+
 
     setCheck(
       "atr",
-      "ATR Volatility — WAIT",
-      "wait"
+      "ATR Volatility — " +
+        (
+          checks.volatility
+            ? "CONFIRMED"
+            : "WAIT"
+        ),
+      checks.volatility
+        ? "ok"
+        : "wait"
     );
+
 
     setCheck(
       "rr",
@@ -1007,105 +685,109 @@ function displayChecks(result) {
       "wait"
     );
 
+
     setCheck(
       "close",
-      "Candle Close — WAIT",
-      "wait"
+      "Candle Close — " +
+        (
+          checks.candleClose
+            ? "CONFIRMED"
+            : "WAIT"
+        ),
+      checks.candleClose
+        ? "ok"
+        : "wait"
+    );
+
+
+    setCheck(
+      "nonrepaint",
+      "Non-Repainting — ACTIVE",
+      "ok"
     );
 
     return;
   }
 
 
-  const buy =
-    result.signal === "BUY";
+  /*
+    BUY or SELL signal.
 
-  const sweepOK =
-    buy
-      ? result.sweepBuy
-      : result.sweepSell;
-
-  const structureOK =
-    buy
-      ? result.structureBuy
-      : result.structureSell;
-
-  const trendOK =
-    buy
-      ? result.bullishTrend
-      : result.bearishTrend;
-
-  const vwapOK =
-    buy
-      ? result.aboveVWAP
-      : result.belowVWAP;
-
-  const momentumOK =
-    buy
-      ? result.momentumBuy
-      : result.momentumSell;
-
+    Worker has already confirmed the complete setup.
+  */
 
   setCheck(
     "sweep",
-    "Liquidity Sweep — " +
-      (sweepOK ? "CONFIRMED" : "FAILED"),
-    sweepOK ? "ok" : "fail"
+    "Liquidity Sweep — CONFIRMED",
+    "ok"
   );
 
 
   setCheck(
     "structure",
-    "BOS / CHoCH — " +
-      (structureOK ? "CONFIRMED" : "FAILED"),
-    structureOK ? "ok" : "fail"
+    "BOS / CHoCH — CONFIRMED",
+    "ok"
   );
 
 
   setCheck(
     "ema",
-    "EMA 20/50 — " +
-      (trendOK ? "CONFIRMED" : "FAILED"),
-    trendOK ? "ok" : "fail"
+    "EMA 20/50 — CONFIRMED",
+    "ok"
   );
 
 
   setCheck(
     "vwap",
     "VWAP — " +
-      (vwapOK ? "CONFIRMED" : "FAILED"),
-    vwapOK ? "ok" : "fail"
+      (
+        checks.vwap
+          ? "CONFIRMED"
+          : "FAILED"
+      ),
+    checks.vwap
+      ? "ok"
+      : "fail"
   );
 
 
   setCheck(
     "momentum",
     "Momentum — " +
-      (momentumOK ? "CONFIRMED" : "FAILED"),
-    momentumOK ? "ok" : "fail"
+      (
+        checks.momentum
+          ? "CONFIRMED"
+          : "FAILED"
+      ),
+    checks.momentum
+      ? "ok"
+      : "fail"
   );
 
 
   setCheck(
     "atr",
     "ATR Volatility — " +
-      (result.volatilityOK
-        ? "CONFIRMED"
-        : "FAILED"),
-    result.volatilityOK ? "ok" : "fail"
+      (
+        checks.volatility
+          ? "CONFIRMED"
+          : "FAILED"
+      ),
+    checks.volatility
+      ? "ok"
+      : "fail"
   );
 
-
-  const validRR =
-    Number.isFinite(result.entry) &&
-    Number.isFinite(result.sl) &&
-    Number.isFinite(result.tp);
 
   setCheck(
     "rr",
     "Risk / Reward — " +
-      (validRR ? "2.5R TARGET" : "FAILED"),
-    validRR ? "ok" : "fail"
+      (
+        result.riskReward
+          ? result.riskReward + "R"
+          : "2.5R TARGET"
+      ),
+    "ok"
   );
 
 
@@ -1114,8 +796,19 @@ function displayChecks(result) {
     "Candle Close — CONFIRMED",
     "ok"
   );
+
+
+  setCheck(
+    "nonrepaint",
+    "Non-Repainting — ACTIVE",
+    "ok"
+  );
 }
 
+
+/* -----------------------------------------
+   MAIN SCAN
+----------------------------------------- */
 
 async function scan() {
 
@@ -1128,61 +821,43 @@ async function scan() {
       "value yellow";
 
 
-    const [gold, candles] =
-      await Promise.all([
-        getGoldPrice(),
-        getCandles()
-      ]);
+    /*
+      Load price and signal at the same time.
+    */
+
+    const [
+      priceResult,
+      signalResult
+    ] = await Promise.all([
+      loadPrice(),
+      loadSignal()
+    ]);
 
 
-    $("price").textContent =
-      formatPrice(gold.price);
+    displaySignal(
+      signalResult
+    );
 
 
-    if (!Array.isArray(candles) ||
-        candles.length < MIN_CANDLES) {
-
-      $("signal").textContent =
-        "WAITING";
-
-      $("signal").className =
-        "signal yellow";
-
-      $("status").textContent =
-        "NOT ENOUGH DATA";
-
-      return;
-    }
-
-
-    const result =
-      calculateSignal(candles);
-
-
-    displaySignal(result);
-
-    displayChecks(result);
+    displayChecks(
+      signalResult
+    );
 
 
     /*
-      Duplicate protection.
-
-      The signal key contains the direction and the
-      closed candle timestamp.
-
-      Therefore the same closed candle cannot generate
-      another displayed signal on every 15-second refresh.
+      Prevent repeated console messages
+      for the same closed-candle signal.
     */
 
     if (
-      result.signal !== "WAITING" &&
-      result.candleTime
+      signalResult.signal !== "WAITING" &&
+      signalResult.candleTime
     ) {
 
       const signalKey =
-        result.signal +
+        signalResult.signal +
         "_" +
-        result.candleTime;
+        signalResult.candleTime;
 
 
       if (
@@ -1193,38 +868,33 @@ async function scan() {
           signalKey;
 
         console.log(
-          "NEW XAU SIGNAL:",
-          result.signal,
-          result
+          "NEW XAUUSD SIGNAL",
+          signalResult
         );
       }
     }
 
 
-    if (
-      result.candleTime &&
-      result.candleTime !== lastClosedCandleTime
-    ) {
-
-      lastClosedCandleTime =
-        result.candleTime;
-
-      console.log(
-        "NEW CLOSED M5 CANDLE:",
-        result.candleTime
-      );
-    }
+    console.log(
+      "XAU AI CHART:",
+      signalResult
+    );
 
 
   } catch (error) {
 
-    console.error(error);
+    console.error(
+      "XAU AI CHART ERROR:",
+      error
+    );
+
 
     $("status").textContent =
       "CONNECTION ERROR";
 
     $("status").className =
       "value red";
+
 
     $("signal").textContent =
       "WAITING";
@@ -1235,18 +905,21 @@ async function scan() {
 }
 
 
-/*
-  First scan immediately.
-*/
+/* -----------------------------------------
+   START
+----------------------------------------- */
+
 scan();
 
 
 /*
-  Refresh every 15 seconds.
+  Check every 15 seconds.
 
-  We still only calculate the signal from the
-  most recently CLOSED M5 candle.
+  The Worker itself only analyzes CLOSED
+  candles, so refreshing every 15 seconds
+  does NOT make the strategy repaint.
 */
+
 setInterval(
   scan,
   REFRESH_MS
