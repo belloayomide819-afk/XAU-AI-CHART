@@ -2,15 +2,12 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // CORS headers so the XAU AI Chart can call this Worker
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Content-Type": "application/json"
+      "Access-Control-Allow-Headers": "Content-Type"
     };
 
-    // Handle browser preflight requests
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
@@ -18,24 +15,7 @@ export default {
       });
     }
 
-    // Health check
-    if (url.pathname === "/") {
-      return new Response(
-        JSON.stringify({
-          ok: true,
-          service: "XAU AI CHART API",
-          status: "online",
-          market: "XAUUSD",
-          timeframe: "M5"
-        }),
-        {
-          status: 200,
-          headers: corsHeaders
-        }
-      );
-    }
-
-    // Live XAUUSD price
+    // GoldAPI endpoint
     if (url.pathname === "/api/gold") {
       try {
         if (!env.GOLD_API_KEY) {
@@ -46,7 +26,10 @@ export default {
             }),
             {
               status: 500,
-              headers: corsHeaders
+              headers: {
+                ...corsHeaders,
+                "Content-Type": "application/json"
+              }
             }
           );
         }
@@ -68,12 +51,14 @@ export default {
           return new Response(
             JSON.stringify({
               ok: false,
-              error: "GoldAPI request failed.",
-              details: data
+              error: "GoldAPI request failed."
             }),
             {
               status: response.status,
-              headers: corsHeaders
+              headers: {
+                ...corsHeaders,
+                "Content-Type": "application/json"
+              }
             }
           );
         }
@@ -98,7 +83,10 @@ export default {
           }),
           {
             status: 200,
-            headers: corsHeaders
+            headers: {
+              ...corsHeaders,
+              "Content-Type": "application/json"
+            }
           }
         );
 
@@ -106,27 +94,40 @@ export default {
         return new Response(
           JSON.stringify({
             ok: false,
-            error: "Unable to retrieve XAUUSD price.",
-            message: error.message
+            error: "Unable to retrieve XAUUSD price."
           }),
           {
             status: 500,
-            headers: corsHeaders
+            headers: {
+              ...corsHeaders,
+              "Content-Type": "application/json"
+            }
           }
         );
       }
     }
 
-    // Unknown endpoint
-    return new Response(
-      JSON.stringify({
-        ok: false,
-        error: "Endpoint not found."
-      }),
-      {
-        status: 404,
-        headers: corsHeaders
-      }
-    );
+    // Worker status endpoint
+    if (url.pathname === "/api/status") {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          service: "XAU AI CHART API",
+          status: "online",
+          market: "XAUUSD",
+          timeframe: "M5"
+        }),
+        {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+    }
+
+    // Serve the XAU AI CHART website
+    return env.ASSETS.fetch(request);
   }
 };
