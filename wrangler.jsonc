@@ -1,5 +1,5 @@
 {
-  "name": "smart-recovery-bot"
+  "name": "smart-recovery-bot",
   "main": "worker.js",
   "compatibility_date": "2026-09-09",
   "assets": {
