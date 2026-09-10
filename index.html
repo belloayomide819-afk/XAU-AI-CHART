@@ -74,10 +74,6 @@
       color: #f3c969;
     }
 
-    .muted {
-      color: #9aa4b5;
-    }
-
     .signal-box {
       margin: 15px 0;
       background: #101521;
@@ -266,12 +262,11 @@
     <div class="card">
       <div class="label">STATUS</div>
       <div class="value yellow" id="status">
-        SCANNING
+        CONNECTING
       </div>
     </div>
 
   </div>
-
 
   <div class="signal-box">
 
@@ -304,7 +299,6 @@
 
   </div>
 
-
   <div class="chart">
 
     <iframe
@@ -315,13 +309,12 @@
 
   </div>
 
-
   <div class="engine">
 
     <h2>Signal Engine</h2>
 
     <div class="engine-info">
-      Core setup: Liquidity Sweep + BOS / CHoCH + EMA Trend +
+      Core setup: Liquidity Sweep + Recent BOS / CHoCH + EMA Trend +
       2 of 3 confirmations. Signals are confirmed only on closed M5 candles.
     </div>
 
@@ -367,7 +360,6 @@
 
   </div>
 
-
   <div class="footer">
     XAU AI CHART scans closed M5 candles only.
     Signals are rule-based and do not guarantee trading results.
@@ -375,8 +367,10 @@
 
 </div>
 
-
 <script>
+
+const WORKER_URL =
+  "https://smart-recovery-bot.belloayomide819.workers.dev";
 
 const REFRESH_MS = 15000;
 
@@ -384,7 +378,7 @@ let lastSignalKey = "";
 
 
 /* -----------------------------------------
-   BASIC HELPERS
+   HELPERS
 ----------------------------------------- */
 
 function $(id) {
@@ -411,9 +405,7 @@ function setCheck(id, text, state) {
   const element = $(id);
 
   element.textContent = text;
-
-  element.className =
-    "check " + state;
+  element.className = "check " + state;
 }
 
 
@@ -423,21 +415,25 @@ function setCheck(id, text, state) {
 
 async function loadPrice() {
 
-  const response =
-    await fetch(
-      "/api/gold",
-      {
-        cache: "no-store"
-      }
-    );
+  const response = await fetch(
+    WORKER_URL + "/api/gold?ts=" + Date.now(),
+    {
+      method: "GET",
+      cache: "no-store"
+    }
+  );
 
-  const data =
-    await response.json();
+  if (!response.ok) {
+    throw new Error(
+      "Gold API HTTP " + response.status
+    );
+  }
+
+  const data = await response.json();
 
   if (!data.ok) {
     throw new Error(
-      data.error ||
-      "Unable to load gold price"
+      data.error || "Unable to load gold price"
     );
   }
 
@@ -448,35 +444,27 @@ async function loadPrice() {
 
 /* -----------------------------------------
    SIGNAL
------------------------------------------
-
-   IMPORTANT:
-
-   We DO NOT calculate another strategy
-   inside the browser.
-
-   The Worker is the single source of truth.
-
-   /api/scan uses the exact same engine
-   that the Cloudflare cron uses for Telegram.
-
 ----------------------------------------- */
 
 async function loadSignal() {
 
-  const response =
-    await fetch(
-      "/api/scan",
-      {
-        cache: "no-store"
-      }
-    );
+  const response = await fetch(
+    WORKER_URL + "/api/scan?ts=" + Date.now(),
+    {
+      method: "GET",
+      cache: "no-store"
+    }
+  );
 
-  const data =
-    await response.json();
+  if (!response.ok) {
+    throw new Error(
+      "Signal API HTTP " + response.status
+    );
+  }
+
+  const data = await response.json();
 
   if (!data.ok) {
-
     throw new Error(
       data.error ||
       "Signal engine unavailable"
@@ -499,17 +487,11 @@ function displaySignal(result) {
 
   if (signal === "BUY") {
 
-    $("signal").textContent =
-      "BUY";
+    $("signal").textContent = "BUY";
+    $("signal").className = "signal green";
 
-    $("signal").className =
-      "signal green";
-
-    $("status").textContent =
-      "BUY SIGNAL";
-
-    $("status").className =
-      "value green";
+    $("status").textContent = "BUY SIGNAL";
+    $("status").className = "value green";
 
     $("entry").textContent =
       formatPrice(result.entry);
@@ -526,17 +508,11 @@ function displaySignal(result) {
 
   if (signal === "SELL") {
 
-    $("signal").textContent =
-      "SELL";
+    $("signal").textContent = "SELL";
+    $("signal").className = "signal red";
 
-    $("signal").className =
-      "signal red";
-
-    $("status").textContent =
-      "SELL SIGNAL";
-
-    $("status").className =
-      "value red";
+    $("status").textContent = "SELL SIGNAL";
+    $("status").className = "value red";
 
     $("entry").textContent =
       formatPrice(result.entry);
@@ -551,31 +527,20 @@ function displaySignal(result) {
   }
 
 
-  $("signal").textContent =
-    "WAITING";
+  $("signal").textContent = "WAITING";
+  $("signal").className = "signal yellow";
 
-  $("signal").className =
-    "signal yellow";
+  $("status").textContent = "SCANNING";
+  $("status").className = "value yellow";
 
-  $("status").textContent =
-    "SCANNING";
-
-  $("status").className =
-    "value yellow";
-
-  $("entry").textContent =
-    "---";
-
-  $("sl").textContent =
-    "---";
-
-  $("tp").textContent =
-    "---";
+  $("entry").textContent = "---";
+  $("sl").textContent = "---";
+  $("tp").textContent = "---";
 }
 
 
 /* -----------------------------------------
-   DISPLAY ENGINE CHECKS
+   DISPLAY CHECKS
 ----------------------------------------- */
 
 function displayChecks(result) {
@@ -584,156 +549,45 @@ function displayChecks(result) {
     result?.checks || {};
 
 
-  /*
-    WAITING state
-
-    We still display the real individual
-    conditions returned by the Worker.
-  */
-
-  if (
-    result?.signal === "WAITING"
-  ) {
-
-    setCheck(
-      "sweep",
-      "Liquidity Sweep — " +
-        (
-          checks.liquiditySweep
-            ? "CONFIRMED"
-            : "WAIT"
-        ),
-      checks.liquiditySweep
-        ? "ok"
-        : "wait"
-    );
-
-
-    setCheck(
-      "structure",
-      "BOS / CHoCH — " +
-        (
-          checks.structure
-            ? "CONFIRMED"
-            : "WAIT"
-        ),
-      checks.structure
-        ? "ok"
-        : "wait"
-    );
-
-
-    setCheck(
-      "ema",
-      "EMA 20/50 — " +
-        (
-          checks.ema
-            ? "CONFIRMED"
-            : "WAIT"
-        ),
-      checks.ema
-        ? "ok"
-        : "wait"
-    );
-
-
-    setCheck(
-      "vwap",
-      "VWAP — " +
-        (
-          checks.vwap
-            ? "CONFIRMED"
-            : "WAIT"
-        ),
-      checks.vwap
-        ? "ok"
-        : "wait"
-    );
-
-
-    setCheck(
-      "momentum",
-      "Momentum — " +
-        (
-          checks.momentum
-            ? "CONFIRMED"
-            : "WAIT"
-        ),
-      checks.momentum
-        ? "ok"
-        : "wait"
-    );
-
-
-    setCheck(
-      "atr",
-      "ATR Volatility — " +
-        (
-          checks.volatility
-            ? "CONFIRMED"
-            : "WAIT"
-        ),
-      checks.volatility
-        ? "ok"
-        : "wait"
-    );
-
-
-    setCheck(
-      "rr",
-      "Risk / Reward — WAIT",
-      "wait"
-    );
-
-
-    setCheck(
-      "close",
-      "Candle Close — " +
-        (
-          checks.candleClose
-            ? "CONFIRMED"
-            : "WAIT"
-        ),
-      checks.candleClose
-        ? "ok"
-        : "wait"
-    );
-
-
-    setCheck(
-      "nonrepaint",
-      "Non-Repainting — ACTIVE",
-      "ok"
-    );
-
-    return;
-  }
-
-
-  /*
-    BUY or SELL signal.
-
-    Worker has already confirmed the complete setup.
-  */
-
   setCheck(
     "sweep",
-    "Liquidity Sweep — CONFIRMED",
-    "ok"
+    "Liquidity Sweep — " +
+      (
+        checks.liquiditySweep
+          ? "CONFIRMED"
+          : "WAIT"
+      ),
+    checks.liquiditySweep
+      ? "ok"
+      : "wait"
   );
 
 
   setCheck(
     "structure",
-    "BOS / CHoCH — CONFIRMED",
-    "ok"
+    "BOS / CHoCH — " +
+      (
+        checks.structure
+          ? "CONFIRMED"
+          : "WAIT"
+      ),
+    checks.structure
+      ? "ok"
+      : "wait"
   );
 
 
   setCheck(
     "ema",
-    "EMA 20/50 — CONFIRMED",
-    "ok"
+    "EMA 20/50 — " +
+      (
+        checks.ema
+          ? "CONFIRMED"
+          : "WAIT"
+      ),
+    checks.ema
+      ? "ok"
+      : "wait"
   );
 
 
@@ -743,11 +597,11 @@ function displayChecks(result) {
       (
         checks.vwap
           ? "CONFIRMED"
-          : "FAILED"
+          : "WAIT"
       ),
     checks.vwap
       ? "ok"
-      : "fail"
+      : "wait"
   );
 
 
@@ -757,11 +611,11 @@ function displayChecks(result) {
       (
         checks.momentum
           ? "CONFIRMED"
-          : "FAILED"
+          : "WAIT"
       ),
     checks.momentum
       ? "ok"
-      : "fail"
+      : "wait"
   );
 
 
@@ -771,30 +625,51 @@ function displayChecks(result) {
       (
         checks.volatility
           ? "CONFIRMED"
-          : "FAILED"
+          : "WAIT"
       ),
     checks.volatility
       ? "ok"
-      : "fail"
+      : "wait"
   );
 
 
-  setCheck(
-    "rr",
-    "Risk / Reward — " +
-      (
-        result.riskReward
-          ? result.riskReward + "R"
-          : "2.5R TARGET"
-      ),
-    "ok"
-  );
+  if (
+    result?.signal === "BUY" ||
+    result?.signal === "SELL"
+  ) {
+
+    setCheck(
+      "rr",
+      "Risk / Reward — " +
+        (
+          result.riskReward
+            ? result.riskReward + "R"
+            : "CONFIRMED"
+        ),
+      "ok"
+    );
+
+  } else {
+
+    setCheck(
+      "rr",
+      "Risk / Reward — WAIT",
+      "wait"
+    );
+  }
 
 
   setCheck(
     "close",
-    "Candle Close — CONFIRMED",
-    "ok"
+    "Candle Close — " +
+      (
+        checks.candleClose
+          ? "CONFIRMED"
+          : "WAIT"
+      ),
+    checks.candleClose
+      ? "ok"
+      : "wait"
   );
 
 
@@ -814,16 +689,9 @@ async function scan() {
 
   try {
 
-    $("status").textContent =
-      "SCANNING";
+    $("status").textContent = "SCANNING";
+    $("status").className = "value yellow";
 
-    $("status").className =
-      "value yellow";
-
-
-    /*
-      Load price and signal at the same time.
-    */
 
     const [
       priceResult,
@@ -834,20 +702,9 @@ async function scan() {
     ]);
 
 
-    displaySignal(
-      signalResult
-    );
+    displaySignal(signalResult);
+    displayChecks(signalResult);
 
-
-    displayChecks(
-      signalResult
-    );
-
-
-    /*
-      Prevent repeated console messages
-      for the same closed-candle signal.
-    */
 
     if (
       signalResult.signal !== "WAITING" &&
@@ -860,12 +717,9 @@ async function scan() {
         signalResult.candleTime;
 
 
-      if (
-        signalKey !== lastSignalKey
-      ) {
+      if (signalKey !== lastSignalKey) {
 
-        lastSignalKey =
-          signalKey;
+        lastSignalKey = signalKey;
 
         console.log(
           "NEW XAUUSD SIGNAL",
@@ -895,7 +749,6 @@ async function scan() {
     $("status").className =
       "value red";
 
-
     $("signal").textContent =
       "WAITING";
 
@@ -910,15 +763,6 @@ async function scan() {
 ----------------------------------------- */
 
 scan();
-
-
-/*
-  Check every 15 seconds.
-
-  The Worker itself only analyzes CLOSED
-  candles, so refreshing every 15 seconds
-  does NOT make the strategy repaint.
-*/
 
 setInterval(
   scan,
