@@ -9,9 +9,6 @@ const MIN_CANDLES = 60;
 const LOOKBACK = 10;
 const STRUCTURE_LOOKBACK = 5;
 
-const SWEEP_WINDOW = 4;
-const STRUCTURE_WINDOW = 3;
-
 const ATR_PERIOD = 14;
 
 const EMA_FAST = 20;
@@ -26,8 +23,18 @@ const TARGET_RR = 2.5;
 
 const MAX_SIGNALS_PER_DAY = 6;
 
+/*
+  Signal memory.
+  The bot remembers the current active direction
+  instead of treating every new candle as a new trade.
+*/
+const SETUP_STATE_KEY = "xauusd-m5-active-setup";
+
+const REARM_CANDLES = 2;
+
 const SIGNAL_TTL = 86400;
 const SIGNAL_CLAIM_TTL = 300;
+const STATE_TTL = 172800;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -176,7 +183,15 @@ function calculateVWAP(candles) {
   return totalPrice / totalWeight;
 }
 
-function getRecentSweep(candles) {
+/*
+  IMPORTANT:
+  Sweep is now checked on the CURRENT closed candle.
+
+  We still use the previous candles as the reference
+  for liquidity, but an old sweep cannot become a
+  brand-new signal several candles later.
+*/
+function getCurrentSweep(candles) {
   if (candles.length < LOOKBACK + 1) {
     return {
       buy: null,
@@ -184,63 +199,63 @@ function getRecentSweep(candles) {
     };
   }
 
-  const start =
-    Math.max(
-      LOOKBACK,
-      candles.length - SWEEP_WINDOW
-    );
+  const i = candles.length - 1;
+  const current = candles[i];
 
-  let buy = null;
-  let sell = null;
+  const previousLow =
+    lowest(candles, i - LOOKBACK, i);
 
-  for (let i = start; i < candles.length; i++) {
-    const current = candles[i];
+  const previousHigh =
+    highest(candles, i - LOOKBACK, i);
 
-    const previousLow =
-      lowest(candles, i - LOOKBACK, i);
+  const body =
+    candleBodyPercentage(current);
 
-    const previousHigh =
-      highest(candles, i - LOOKBACK, i);
+  const buySweep =
+    current.low < previousLow &&
+    current.close > previousLow &&
+    bullish(current) &&
+    body >= 35;
 
-    const body =
-      candleBodyPercentage(current);
-
-    const buySweep =
-      current.low < previousLow &&
-      current.close > previousLow &&
-      bullish(current) &&
-      body >= 35;
-
-    const sellSweep =
-      current.high > previousHigh &&
-      current.close < previousHigh &&
-      bearish(current) &&
-      body >= 35;
-
-    if (buySweep) {
-      buy = {
-        index: i,
-        time: current.time,
-        level: previousLow
-      };
-    }
-
-    if (sellSweep) {
-      sell = {
-        index: i,
-        time: current.time,
-        level: previousHigh
-      };
-    }
-  }
+  const sellSweep =
+    current.high > previousHigh &&
+    current.close < previousHigh &&
+    bearish(current) &&
+    body >= 35;
 
   return {
-    buy,
-    sell
+    buy: buySweep
+      ? {
+          index: i,
+          time: current.time,
+          level: previousLow
+        }
+      : null,
+
+    sell: sellSweep
+      ? {
+          index: i,
+          time: current.time,
+          level: previousHigh
+        }
+      : null
   };
 }
 
-function getRecentStructure(candles) {
+/*
+  IMPORTANT:
+  Structure is also checked ONLY on the current
+  closed candle.
+
+  This prevents:
+  04:35 SELL
+  04:40 SELL
+  04:45 SELL
+
+  from being treated as three separate structure
+  setups just because each candle remains bearish.
+*/
+function getCurrentStructure(candles) {
   if (candles.length < STRUCTURE_LOOKBACK + 1) {
     return {
       buy: null,
@@ -248,65 +263,52 @@ function getRecentStructure(candles) {
     };
   }
 
-  const start =
-    Math.max(
-      STRUCTURE_LOOKBACK,
-      candles.length - STRUCTURE_WINDOW
+  const i = candles.length - 1;
+  const current = candles[i];
+
+  const recentHigh =
+    highest(
+      candles,
+      i - STRUCTURE_LOOKBACK,
+      i
     );
 
-  let buy = null;
-  let sell = null;
+  const recentLow =
+    lowest(
+      candles,
+      i - STRUCTURE_LOOKBACK,
+      i
+    );
 
-  for (let i = start; i < candles.length; i++) {
-    const current = candles[i];
+  const body =
+    candleBodyPercentage(current);
 
-    const recentHigh =
-      highest(
-        candles,
-        i - STRUCTURE_LOOKBACK,
-        i
-      );
+  const buyStructure =
+    current.close > recentHigh &&
+    bullish(current) &&
+    body >= 35;
 
-    const recentLow =
-      lowest(
-        candles,
-        i - STRUCTURE_LOOKBACK,
-        i
-      );
-
-    const body =
-      candleBodyPercentage(current);
-
-    const buyStructure =
-      current.close > recentHigh &&
-      bullish(current) &&
-      body >= 35;
-
-    const sellStructure =
-      current.close < recentLow &&
-      bearish(current) &&
-      body >= 35;
-
-    if (buyStructure) {
-      buy = {
-        index: i,
-        time: current.time,
-        level: recentHigh
-      };
-    }
-
-    if (sellStructure) {
-      sell = {
-        index: i,
-        time: current.time,
-        level: recentLow
-      };
-    }
-  }
+  const sellStructure =
+    current.close < recentLow &&
+    bearish(current) &&
+    body >= 35;
 
   return {
-    buy,
-    sell
+    buy: buyStructure
+      ? {
+          index: i,
+          time: current.time,
+          level: recentHigh
+        }
+      : null,
+
+    sell: sellStructure
+      ? {
+          index: i,
+          time: current.time,
+          level: recentLow
+        }
+      : null
   };
 }
 
@@ -395,8 +397,11 @@ function buildSignal(candles) {
   }
 
   /*
-    Use only CLOSED candles.
-    The newest Twelve Data candle may still be forming.
+    Twelve Data may return the newest candle while
+    it is still forming.
+
+    Therefore the final candle is removed and the
+    newest remaining candle is treated as closed.
   */
   const closed =
     candles.slice(0, -1);
@@ -426,11 +431,14 @@ function buildSignal(candles) {
   const momentum =
     getMomentum(closed);
 
+  /*
+    Fresh triggers only.
+  */
   const sweep =
-    getRecentSweep(closed);
+    getCurrentSweep(closed);
 
   const structure =
-    getRecentStructure(closed);
+    getCurrentStructure(closed);
 
   const buySweep =
     !!sweep.buy;
@@ -445,8 +453,8 @@ function buildSignal(candles) {
     !!structure.sell;
 
   /*
-    Higher-frequency trigger:
-    Sweep OR recent structure.
+    Trigger:
+    Fresh Sweep OR Fresh Structure.
   */
   const buyTrigger =
     buySweep || buyStructure;
@@ -474,9 +482,9 @@ function buildSignal(candles) {
 
   /*
     Require at least 2 of:
-    VWAP
-    Momentum
-    ATR
+      VWAP
+      Momentum
+      ATR
   */
   const buySecondary =
     Number(vwapBuy) +
@@ -536,6 +544,10 @@ function buildSignal(candles) {
     nonRepainting: "ACTIVE"
   };
 
+  /*
+    No clean setup.
+    The bot stays quiet.
+  */
   if (!buyValid && !sellValid) {
     return {
       signal: "WAITING",
@@ -549,12 +561,26 @@ function buildSignal(candles) {
     };
   }
 
+  /*
+    Never allow simultaneous BUY + SELL.
+  */
+  if (buyValid && sellValid) {
+    return {
+      signal: "WAITING",
+      reason:
+        "Conflicting BUY and SELL setups",
+      candleTime: current.time,
+      setupAnchor: null,
+      checks
+    };
+  }
+
   let signal;
   let setup;
   let stopLoss;
   let risk;
 
-  if (buyValid && !sellValid) {
+  if (buyValid) {
     signal = "BUY";
 
     setup =
@@ -585,7 +611,7 @@ function buildSignal(candles) {
       current.close -
       stopLoss;
 
-  } else if (sellValid && !buyValid) {
+  } else {
     signal = "SELL";
 
     setup =
@@ -615,15 +641,6 @@ function buildSignal(candles) {
     risk =
       stopLoss -
       current.close;
-
-  } else {
-    return {
-      signal: "WAITING",
-      reason: "Conflicting BUY and SELL setups",
-      candleTime: current.time,
-      setupAnchor: null,
-      checks
-    };
   }
 
   if (
@@ -632,7 +649,8 @@ function buildSignal(candles) {
   ) {
     return {
       signal: "WAITING",
-      reason: "Invalid risk distance",
+      reason:
+        "Invalid risk distance",
       candleTime: current.time,
       setupAnchor: null,
       checks
@@ -658,7 +676,8 @@ function buildSignal(candles) {
   if (rr < MIN_RR) {
     return {
       signal: "WAITING",
-      reason: "RR below minimum",
+      reason:
+        "RR below minimum",
       candleTime: current.time,
       setupAnchor: null,
       checks: {
@@ -690,8 +709,7 @@ function buildSignal(candles) {
       current.time,
 
     /*
-      This identifies the actual setup.
-      Same setup = no repeated Telegram alert.
+      Fresh trigger candle is now the setup anchor.
     */
     setupAnchor:
       setup
@@ -941,6 +959,7 @@ ATR: ${signal.checks.atr}
 
 Candle: ${signal.candleTime}
 
+Fresh setup confirmed.
 Closed candle confirmed.
 Non-repainting system.`;
 
@@ -1097,13 +1116,211 @@ async function incrementDailySignalCount(env) {
 }
 
 /*
-  Every valid setup gets one deterministic ID.
-
-  Example:
-  signal-SELL-2026-09-11 00:15:00
-
-  Same setup = same ID.
+  ================================
+  ACTIVE SETUP STATE
+  ================================
 */
+
+function defaultSetupState() {
+  return {
+    direction: null,
+    anchor: null,
+    lastSignalCandle: null,
+    neutralCandles: 0,
+    updatedAt: null
+  };
+}
+
+async function getSetupState(env) {
+  if (!env.SIGNAL_CACHE) {
+    return defaultSetupState();
+  }
+
+  const raw =
+    await env.SIGNAL_CACHE.get(
+      SETUP_STATE_KEY
+    );
+
+  if (!raw) {
+    return defaultSetupState();
+  }
+
+  try {
+    const state =
+      JSON.parse(raw);
+
+    return {
+      ...defaultSetupState(),
+      ...state
+    };
+
+  } catch {
+    return defaultSetupState();
+  }
+}
+
+async function saveSetupState(
+  env,
+  state
+) {
+  if (!env.SIGNAL_CACHE) {
+    return;
+  }
+
+  await env.SIGNAL_CACHE.put(
+    SETUP_STATE_KEY,
+    JSON.stringify({
+      ...state,
+      updatedAt:
+        new Date().toISOString()
+    }),
+    {
+      expirationTtl:
+        STATE_TTL
+    }
+  );
+}
+
+/*
+  A setup stays active while the same direction
+  continues producing valid conditions.
+
+  The bot only rearms after a genuine neutral period.
+*/
+async function updateSetupLifecycle(
+  env,
+  signal
+) {
+  const state =
+    await getSetupState(env);
+
+  /*
+    No active setup yet.
+  */
+  if (!state.direction) {
+    return {
+      state,
+      action: "NEW_SETUP"
+    };
+  }
+
+  /*
+    Same direction:
+    KEEP ACTIVE.
+    Never send another alert just because
+    Entry/SL/TP changed.
+  */
+  if (
+    signal.signal ===
+    state.direction
+  ) {
+    const updated = {
+      ...state,
+      neutralCandles: 0,
+      lastSignalCandle:
+        signal.candleTime
+    };
+
+    await saveSetupState(
+      env,
+      updated
+    );
+
+    return {
+      state: updated,
+      action: "SAME_ACTIVE_SETUP"
+    };
+  }
+
+  /*
+    Opposite direction:
+    This is potentially a reversal.
+    Allow it because the current candle has
+    produced a fresh opposite trigger.
+  */
+  if (
+    signal.signal !==
+    state.direction
+  ) {
+    return {
+      state,
+      action: "REVERSAL"
+    };
+  }
+
+  return {
+    state,
+    action: "WAIT"
+  };
+}
+
+/*
+  Called when the market has no valid setup.
+
+  After two distinct neutral closed candles,
+  the previous setup is considered finished
+  and the bot becomes ready for a new setup.
+*/
+async function processNeutralState(
+  env,
+  candleTime
+) {
+  const state =
+    await getSetupState(env);
+
+  if (!state.direction) {
+    return state;
+  }
+
+  if (
+    state.lastNeutralCandle ===
+    candleTime
+  ) {
+    return state;
+  }
+
+  const neutralCount =
+    Number(
+      state.neutralCandles || 0
+    ) + 1;
+
+  if (
+    neutralCount >=
+    REARM_CANDLES
+  ) {
+    const reset =
+      defaultSetupState();
+
+    await saveSetupState(
+      env,
+      reset
+    );
+
+    return reset;
+  }
+
+  const updated = {
+    ...state,
+    neutralCandles:
+      neutralCount,
+    lastNeutralCandle:
+      candleTime
+  };
+
+  await saveSetupState(
+    env,
+    updated
+  );
+
+  return updated;
+}
+
+/*
+  ================================
+  SIGNAL DUPLICATE PROTECTION
+  ================================
+*/
+
 function getSignalId(signal) {
   return (
     `${signal.signal}-${signal.setupAnchor}`
@@ -1122,30 +1339,19 @@ function getClaimKey(signal) {
   );
 }
 
-/*
-  Check whether this setup has already
-  successfully sent a Telegram alert.
-*/
 async function alreadySent(env, signal) {
   if (!env.SIGNAL_CACHE) {
     return false;
   }
 
-  const key =
-    getSentKey(signal);
-
   const value =
-    await env.SIGNAL_CACHE.get(key);
+    await env.SIGNAL_CACHE.get(
+      getSentKey(signal)
+    );
 
   return !!value;
 }
 
-/*
-  Claim the setup BEFORE sending Telegram.
-
-  This prevents multiple scans from all
-  sending the same signal at the same time.
-*/
 async function claimSignal(env, signal) {
   if (!env.SIGNAL_CACHE) {
     return true;
@@ -1175,11 +1381,6 @@ async function claimSignal(env, signal) {
     return false;
   }
 
-  /*
-    Create a short-lived claim.
-    This blocks another scan from
-    sending the same setup immediately.
-  */
   await env.SIGNAL_CACHE.put(
     claimKey,
     "claimed",
@@ -1197,11 +1398,8 @@ async function markSent(env, signal) {
     return;
   }
 
-  const sentKey =
-    getSentKey(signal);
-
   await env.SIGNAL_CACHE.put(
-    sentKey,
+    getSentKey(signal),
     "sent",
     {
       expirationTtl:
@@ -1215,32 +1413,73 @@ async function releaseClaim(env, signal) {
     return;
   }
 
-  const claimKey =
-    getClaimKey(signal);
-
   await env.SIGNAL_CACHE.delete(
-    claimKey
+    getClaimKey(signal)
   );
 }
 
 /*
-  Process an already-built signal.
-
-  This is the ONLY place where automatic
-  Telegram notifications are sent.
+  ================================
+  PROCESS SIGNAL
+  ================================
 */
+
 async function processSignal(
   env,
   signal
 ) {
+  /*
+    WAITING:
+    No Telegram message.
+  */
   if (
     signal.signal !== "BUY" &&
     signal.signal !== "SELL"
   ) {
+    await processNeutralState(
+      env,
+      signal.candleTime
+    );
+
     return {
       ok: true,
       ...signal,
       telegramSent: false
+    };
+  }
+
+  /*
+    Check setup lifecycle BEFORE
+    attempting Telegram.
+  */
+  const lifecycle =
+    await updateSetupLifecycle(
+      env,
+      signal
+    );
+
+  /*
+    SAME ACTIVE DIRECTION:
+    Suppress the signal.
+
+    Example:
+      04:35 SELL -> alert
+      04:40 SELL -> suppressed
+      04:45 SELL -> suppressed
+  */
+  if (
+    lifecycle.action ===
+    "SAME_ACTIVE_SETUP"
+  ) {
+    return {
+      ok: true,
+      ...signal,
+      telegramSent: false,
+      duplicate: true,
+      reason:
+        "Same direction setup is already active.",
+      activeDirection:
+        lifecycle.state.direction
     };
   }
 
@@ -1261,6 +1500,9 @@ async function processSignal(
     };
   }
 
+  /*
+    Existing exact-setup protection.
+  */
   const duplicate =
     await alreadySent(
       env,
@@ -1278,7 +1520,7 @@ async function processSignal(
   }
 
   /*
-    Claim BEFORE Telegram send.
+    Claim before sending.
   */
   const claimed =
     await claimSignal(
@@ -1313,19 +1555,46 @@ async function processSignal(
       env
     );
 
+    /*
+      ONLY after successful Telegram send
+      do we officially activate the setup.
+    */
+    await saveSetupState(
+      env,
+      {
+        direction:
+          signal.signal,
+
+        anchor:
+          signal.setupAnchor,
+
+        lastSignalCandle:
+          signal.candleTime,
+
+        neutralCandles: 0,
+
+        lastNeutralCandle: null,
+
+        updatedAt:
+          new Date().toISOString()
+      }
+    );
+
     return {
       ok: true,
       ...signal,
       telegramSent: true,
       telegramError: null,
-      telegramErrorCode: null
+      telegramErrorCode: null,
+      setupState:
+        "ACTIVE"
     };
   }
 
   /*
     Telegram failed.
-    Release the claim so the next Cron
-    run can try again.
+    Do NOT activate the setup.
+    The next Cron can retry.
   */
   await releaseClaim(
     env,
@@ -1343,9 +1612,6 @@ async function processSignal(
   };
 }
 
-/*
-  Automatic Cron scanner.
-*/
 async function scanAndNotify(env) {
   const candles =
     await getCandles(env);
@@ -1386,18 +1652,28 @@ export default {
           service:
             "XAU AI CHART API",
           status: "online",
-          market: "XAUUSD",
-          timeframe: "M5",
-          goldApi: false,
+
+          market:
+            "XAUUSD",
+
+          timeframe:
+            "M5",
+
+          goldApi:
+            false,
+
           twelveData:
             !!env.TWELVE_DATA_API_KEY,
+
           telegram:
             !!env.TELEGRAM_BOT_TOKEN &&
             !!env.TELEGRAM_CHAT_ID,
-          telegramTest: true,
+
+          telegramTest:
+            true,
 
           signalEngine:
-            "Higher-frequency Sweep OR Structure + EMA + 2/3 confirmation",
+            "Fresh Sweep OR Structure + EMA + 2/3 confirmation + Active Setup Lifecycle",
 
           priceSource:
             "Twelve Data",
@@ -1406,7 +1682,10 @@ export default {
             MAX_SIGNALS_PER_DAY,
 
           notificationMode:
-            "Cron-only automatic Telegram"
+            "Cron-only automatic Telegram",
+
+          duplicateProtection:
+            "Active direction lifecycle"
         });
       }
 
@@ -1416,8 +1695,11 @@ export default {
 
         return json({
           ok: true,
-          symbol: "XAUUSD",
+          symbol:
+            "XAUUSD",
+
           price,
+
           source:
             "Twelve Data"
         });
@@ -1429,27 +1711,20 @@ export default {
 
         return json({
           ok: true,
-          symbol: "XAUUSD",
-          timeframe: "M5",
+          symbol:
+            "XAUUSD",
+
+          timeframe:
+            "M5",
+
           candles
         });
       }
 
       /*
-        IMPORTANT:
+        Normal website scan.
 
-        /api/scan now ONLY reads/scans the market.
-
-        It does NOT send Telegram by default.
-
-        This means your website can refresh
-        every 15 seconds without producing
-        duplicate Telegram alerts.
-
-        If you specifically want to manually
-        trigger a Telegram signal, use:
-
-        /api/scan?notify=1
+        NO Telegram notification.
       */
       if (url.pathname === "/api/scan") {
         const candles =
@@ -1467,7 +1742,10 @@ export default {
           return json({
             ok: true,
             ...signal,
-            telegramSent: false,
+
+            telegramSent:
+              false,
+
             notificationMode:
               "Cron-only"
           });
@@ -1519,11 +1797,6 @@ export default {
     }
   },
 
-  /*
-    Cloudflare Cron:
-    This is now the automatic Telegram
-    notification engine.
-  */
   async scheduled(
     event,
     env,
@@ -1533,8 +1806,7 @@ export default {
       scanAndNotify(env)
         .catch(() => {
           /*
-            If one scan fails, the next
-            Cron run will try again.
+            Next Cron run will retry.
           */
         })
     );
