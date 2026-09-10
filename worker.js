@@ -18,13 +18,16 @@ function json(data, status = 200) {
   XAU AI CHART
   Higher-frequency M5 engine
 
+  Data:
+  Twelve Data for XAUUSD price + M5 candles
+
   Core:
   Liquidity Sweep
   + Recent Structure Confirmation
   + Directional EMA
   + 2 of 3 confirmations
 
-  Only CLOSED candles are used.
+  Only CLOSED candles are used for signals.
 */
 
 const MIN_CANDLES = 60;
@@ -64,20 +67,13 @@ function emaSeries(values, period) {
     sum += values[i];
   }
 
-  result[period - 1] =
-    sum / period;
+  result[period - 1] = sum / period;
 
-  const multiplier =
-    2 / (period + 1);
+  const multiplier = 2 / (period + 1);
 
-  for (
-    let i = period;
-    i < values.length;
-    i++
-  ) {
+  for (let i = period; i < values.length; i++) {
     result[i] =
-      (values[i] - result[i - 1]) *
-        multiplier +
+      (values[i] - result[i - 1]) * multiplier +
       result[i - 1];
   }
 
@@ -90,39 +86,27 @@ function emaSeries(values, period) {
 ========================================================= */
 
 function atrSeries(candles, period = 14) {
-  const result =
-    new Array(candles.length).fill(null);
+  const result = new Array(candles.length).fill(null);
 
   if (candles.length < period + 1) {
     return result;
   }
 
-  const tr =
-    new Array(candles.length).fill(null);
+  const tr = new Array(candles.length).fill(null);
 
   tr[0] =
     candles[0].high -
     candles[0].low;
 
   for (let i = 1; i < candles.length; i++) {
-    const current =
-      candles[i];
+    const current = candles[i];
+    const previous = candles[i - 1];
 
-    const previous =
-      candles[i - 1];
-
-    tr[i] =
-      Math.max(
-        current.high - current.low,
-        Math.abs(
-          current.high -
-          previous.close
-        ),
-        Math.abs(
-          current.low -
-          previous.close
-        )
-      );
+    tr[i] = Math.max(
+      current.high - current.low,
+      Math.abs(current.high - previous.close),
+      Math.abs(current.low - previous.close)
+    );
   }
 
   let initial = 0;
@@ -134,15 +118,10 @@ function atrSeries(candles, period = 14) {
   result[period - 1] =
     initial / period;
 
-  for (
-    let i = period;
-    i < candles.length;
-    i++
-  ) {
+  for (let i = period; i < candles.length; i++) {
     result[i] =
       (
-        result[i - 1] *
-        (period - 1) +
+        result[i - 1] * (period - 1) +
         tr[i]
       ) / period;
   }
@@ -153,25 +132,16 @@ function atrSeries(candles, period = 14) {
 
 /* =========================================================
    VWAP PROXY
-
-   Twelve Data does not reliably provide usable volume
-   for XAUUSD here, so this is a price-weighted proxy.
 ========================================================= */
 
 function vwapSeries(candles) {
-  const result =
-    new Array(candles.length).fill(null);
+  const result = new Array(candles.length).fill(null);
 
   let priceTotal = 0;
   let weightTotal = 0;
 
-  for (
-    let i = 0;
-    i < candles.length;
-    i++
-  ) {
-    const candle =
-      candles[i];
+  for (let i = 0; i < candles.length; i++) {
+    const candle = candles[i];
 
     const typical =
       (
@@ -184,8 +154,7 @@ function vwapSeries(candles) {
     weightTotal += 1;
 
     result[i] =
-      priceTotal /
-      weightTotal;
+      priceTotal / weightTotal;
   }
 
   return result;
@@ -197,13 +166,11 @@ function vwapSeries(candles) {
 ========================================================= */
 
 function bullish(candle) {
-  return candle.close >
-    candle.open;
+  return candle.close > candle.open;
 }
 
 function bearish(candle) {
-  return candle.close <
-    candle.open;
+  return candle.close < candle.open;
 }
 
 
@@ -211,10 +178,7 @@ function bearish(candle) {
    LIQUIDITY SWEEP
 ========================================================= */
 
-function detectSweepAt(
-  candles,
-  index
-) {
+function detectSweepAt(candles, index) {
   if (index < LOOKBACK) {
     return {
       buy: false,
@@ -222,18 +186,13 @@ function detectSweepAt(
     };
   }
 
-  const current =
-    candles[index];
+  const current = candles[index];
 
-  let previousLow =
-    Infinity;
-
-  let previousHigh =
-    -Infinity;
+  let previousLow = Infinity;
+  let previousHigh = -Infinity;
 
   for (
-    let i =
-      index - LOOKBACK;
+    let i = index - LOOKBACK;
     i < index;
     i++
   ) {
@@ -249,16 +208,6 @@ function detectSweepAt(
         candles[i].high
       );
   }
-
-  /*
-    BUY:
-    Price takes previous lows,
-    then closes back above them.
-
-    SELL:
-    Price takes previous highs,
-    then closes back below them.
-  */
 
   const buy =
     current.low < previousLow &&
@@ -277,10 +226,7 @@ function detectSweepAt(
 }
 
 
-function findRecentSweep(
-  candles,
-  index
-) {
+function findRecentSweep(candles, index) {
   const result = {
     buy: false,
     sell: false,
@@ -325,10 +271,7 @@ function findRecentSweep(
    STRUCTURE
 ========================================================= */
 
-function detectStructureAt(
-  candles,
-  index
-) {
+function detectStructureAt(candles, index) {
   if (
     index <
     STRUCTURE_LOOKBACK + 1
@@ -342,16 +285,12 @@ function detectStructureAt(
   const current =
     candles[index];
 
-  let recentHigh =
-    -Infinity;
-
-  let recentLow =
-    Infinity;
+  let recentHigh = -Infinity;
+  let recentLow = Infinity;
 
   for (
     let i =
-      index -
-      STRUCTURE_LOOKBACK;
+      index - STRUCTURE_LOOKBACK;
     i < index;
     i++
   ) {
@@ -379,10 +318,6 @@ function detectStructureAt(
   };
 }
 
-
-/*
-  Structure can confirm shortly after the sweep.
-*/
 
 function findRecentStructure(
   candles,
@@ -456,11 +391,6 @@ function momentum(
       current.open
     );
 
-  /*
-    Lower body requirement than the old engine,
-    but still requires directional movement.
-  */
-
   const strongBody =
     body >=
     atr[index] * 0.15;
@@ -490,8 +420,7 @@ function getSwingLow(
   start,
   end
 ) {
-  let value =
-    Infinity;
+  let value = Infinity;
 
   for (
     let i = start;
@@ -514,8 +443,7 @@ function getSwingHigh(
   start,
   end
 ) {
-  let value =
-    -Infinity;
+  let value = -Infinity;
 
   for (
     let i = start;
@@ -537,9 +465,7 @@ function getSwingHigh(
    ANALYZE SIGNAL
 ========================================================= */
 
-function analyzeSignal(
-  candles
-) {
+function analyzeSignal(candles) {
   if (
     !Array.isArray(candles) ||
     candles.length < MIN_CANDLES
@@ -553,7 +479,6 @@ function analyzeSignal(
 
   /*
     Ignore newest candle.
-
     This guarantees that the engine never uses
     an unfinished candle for confirmation.
   */
@@ -617,21 +542,11 @@ function analyzeSignal(
     };
   }
 
-
-  /* -------------------------------------------------------
-     SWEEP
-  ------------------------------------------------------- */
-
   const recentSweep =
     findRecentSweep(
       closed,
       index
     );
-
-
-  /* -------------------------------------------------------
-     STRUCTURE
-  ------------------------------------------------------- */
 
   const recentStructure =
     findRecentStructure(
@@ -639,32 +554,12 @@ function analyzeSignal(
       index
     );
 
-
-  /* -------------------------------------------------------
-     MOMENTUM
-  ------------------------------------------------------- */
-
   const momentumResult =
     momentum(
       closed,
       index,
       atr
     );
-
-
-  /* -------------------------------------------------------
-     EMA TREND
-
-     More responsive than the old strict condition.
-
-     BUY:
-     EMA20 above EMA50 OR price above both
-     and EMA20 is rising.
-
-     SELL:
-     EMA20 below EMA50 OR price below both
-     and EMA20 is falling.
-  ------------------------------------------------------- */
 
   const previousEma20 =
     ema20[index - 1];
@@ -695,11 +590,6 @@ function analyzeSignal(
     ) &&
     emaFalling;
 
-
-  /* -------------------------------------------------------
-     VWAP
-  ------------------------------------------------------- */
-
   const vwapBuy =
     current.close >
     vwap[index];
@@ -708,19 +598,9 @@ function analyzeSignal(
     current.close <
     vwap[index];
 
-
-  /* -------------------------------------------------------
-     VOLATILITY
-  ------------------------------------------------------- */
-
   const volatilityOK =
     atr[index] >
     MIN_ATR;
-
-
-  /* -------------------------------------------------------
-     SECONDARY CONFIRMATIONS
-  ------------------------------------------------------- */
 
   const buySecondary =
     [
@@ -736,15 +616,6 @@ function analyzeSignal(
       volatilityOK
     ].filter(Boolean).length;
 
-
-  /* -------------------------------------------------------
-     SIGNAL
-
-     Sweep and structure must agree directionally.
-
-     They can happen within the recent confirmation window.
-  ------------------------------------------------------- */
-
   const buySignal =
     recentSweep.buy &&
     recentStructure.buy &&
@@ -756,7 +627,6 @@ function analyzeSignal(
     recentStructure.sell &&
     trendSell &&
     sellSecondary >= 2;
-
 
   let signal =
     "WAITING";
@@ -774,11 +644,6 @@ function analyzeSignal(
   ) {
     signal = "SELL";
   }
-
-
-  /* -------------------------------------------------------
-     CHECKS
-  ------------------------------------------------------- */
 
   const baseChecks = {
     liquiditySweep:
@@ -814,7 +679,6 @@ function analyzeSignal(
     sellSecondary
   };
 
-
   if (
     signal === "WAITING"
   ) {
@@ -827,20 +691,13 @@ function analyzeSignal(
     };
   }
 
-
-  /* =======================================================
-     ENTRY / SL / TP
-  ======================================================= */
-
   const entry =
     current.close;
 
   let stopLoss;
   let takeProfit;
 
-
   if (signal === "BUY") {
-
     const sweepIndex =
       recentSweep.index >= 0
         ? recentSweep.index
@@ -861,11 +718,6 @@ function analyzeSignal(
         start,
         index
       );
-
-    /*
-      Protect below the structure/sweep area
-      or below ATR-based protection.
-    */
 
     stopLoss =
       Math.min(
@@ -897,9 +749,7 @@ function analyzeSignal(
       RR_TARGET;
   }
 
-
   if (signal === "SELL") {
-
     const sweepIndex =
       recentSweep.index >= 0
         ? recentSweep.index
@@ -951,11 +801,6 @@ function analyzeSignal(
       RR_TARGET;
   }
 
-
-  /* =======================================================
-     RISK / REWARD
-  ======================================================= */
-
   const risk =
     signal === "BUY"
       ? entry - stopLoss
@@ -971,7 +816,6 @@ function analyzeSignal(
       ? reward / risk
       : 0;
 
-
   if (rr < MIN_RR) {
     return {
       signal: "WAITING",
@@ -984,13 +828,9 @@ function analyzeSignal(
     };
   }
 
-
-  /* =======================================================
-     FINAL SIGNAL
-  ======================================================= */
-
   return {
     signal,
+
     candleTime:
       current.time,
 
@@ -1050,7 +890,7 @@ function analyzeSignal(
 
 
 /* =========================================================
-   TWELVE DATA
+   TWELVE DATA CANDLES
 ========================================================= */
 
 async function getCandles(env) {
@@ -1115,6 +955,46 @@ async function getCandles(env) {
           ? Number(candle.volume)
           : null
     }));
+}
+
+
+/* =========================================================
+   TWELVE DATA LIVE PRICE
+========================================================= */
+
+async function getLivePrice(env) {
+  if (!env.TWELVE_DATA_API_KEY) {
+    throw new Error(
+      "TWELVE_DATA_API_KEY secret is not configured."
+    );
+  }
+
+  const apiUrl =
+    "https://api.twelvedata.com/price" +
+    "?symbol=XAU/USD" +
+    "&apikey=" +
+    encodeURIComponent(
+      env.TWELVE_DATA_API_KEY
+    );
+
+  const response =
+    await fetch(apiUrl);
+
+  const data =
+    await response.json();
+
+  if (
+    !response.ok ||
+    data.status === "error" ||
+    !data.price
+  ) {
+    throw new Error(
+      "Twelve Data price request failed: " +
+      JSON.stringify(data)
+    );
+  }
+
+  return Number(data.price);
 }
 
 
@@ -1220,15 +1100,8 @@ async function scanAndNotify(
     };
   }
 
-
-  /*
-    One Telegram notification per
-    signal direction + closed candle.
-  */
-
   const signalKey =
     `${signal.signal}_${signal.candleTime}`;
-
 
   const alreadySent =
     env.SIGNAL_CACHE
@@ -1236,7 +1109,6 @@ async function scanAndNotify(
           signalKey
         )
       : null;
-
 
   if (alreadySent) {
     return {
@@ -1247,12 +1119,10 @@ async function scanAndNotify(
     };
   }
 
-
   await sendTelegram(
     env,
     signal
   );
-
 
   if (env.SIGNAL_CACHE) {
     await env.SIGNAL_CACHE.put(
@@ -1264,7 +1134,6 @@ async function scanAndNotify(
       }
     );
   }
-
 
   return {
     ok: true,
@@ -1298,7 +1167,6 @@ export default {
       );
     }
 
-
     const url =
       new URL(
         request.url
@@ -1329,7 +1197,7 @@ export default {
           "M5",
 
         goldApi:
-          !!env.GOLD_API_KEY,
+          false,
 
         twelveData:
           !!env.TWELVE_DATA_API_KEY,
@@ -1339,13 +1207,16 @@ export default {
           !!env.TELEGRAM_CHAT_ID,
 
         signalEngine:
-          "Higher-frequency Sweep + Recent Structure + EMA + 2/3 confirmation"
+          "Higher-frequency Sweep + Recent Structure + EMA + 2/3 confirmation",
+
+        priceSource:
+          "Twelve Data"
       });
     }
 
 
     /* -----------------------------------------------------
-       GOLD PRICE
+       LIVE GOLD PRICE
     ----------------------------------------------------- */
 
     if (
@@ -1353,54 +1224,12 @@ export default {
       "/api/gold"
     ) {
 
-      if (!env.GOLD_API_KEY) {
-        return json(
-          {
-            ok: false,
-            error:
-              "GOLD_API_KEY secret is not configured."
-          },
-          500
-        );
-      }
-
-
       try {
 
-        const response =
-          await fetch(
-            "https://www.goldapi.io/api/price/XAU/USD",
-            {
-              headers: {
-                "x-access-token":
-                  env.GOLD_API_KEY,
-
-                "Content-Type":
-                  "application/json"
-              }
-            }
+        const price =
+          await getLivePrice(
+            env
           );
-
-
-        const data =
-          await response.json();
-
-
-        if (!response.ok) {
-          return json(
-            {
-              ok: false,
-
-              error:
-                "GoldAPI request failed.",
-
-              details:
-                data
-            },
-            response.status
-          );
-        }
-
 
         return json({
           ok: true,
@@ -1408,44 +1237,10 @@ export default {
           market:
             "XAUUSD",
 
-          price:
-            data.price,
-
-          bid:
-            data.bid,
-
-          ask:
-            data.ask,
-
-          open:
-            data.open_price,
-
-          high:
-            data.high_price,
-
-          low:
-            data.low_price,
-
-          previousClose:
-            data.prev_close_price,
-
-          change:
-            data.ch,
-
-          changePercent:
-            data.chp,
-
-          timestamp:
-            data.timestamp,
-
-          datetime:
-            data.date,
-
-          exchange:
-            data.exchange,
+          price,
 
           source:
-            "GoldAPI"
+            "Twelve Data"
         });
 
       } catch (error) {
@@ -1455,7 +1250,7 @@ export default {
             ok: false,
 
             error:
-              "GoldAPI connection failed.",
+              "Live XAUUSD price request failed.",
 
             details:
               error.message
@@ -1481,7 +1276,6 @@ export default {
           await getCandles(
             env
           );
-
 
         return json({
           ok: true,
@@ -1534,7 +1328,6 @@ export default {
           await scanAndNotify(
             env
           );
-
 
         return json(
           result
