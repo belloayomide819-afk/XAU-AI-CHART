@@ -27,6 +27,7 @@ const TARGET_RR = 2.5;
 const MAX_SIGNALS_PER_DAY = 6;
 
 const SIGNAL_TTL = 86400;
+const SIGNAL_CLAIM_TTL = 300;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -91,9 +92,10 @@ function calculateEMA(candles, period) {
 
   const multiplier = 2 / (period + 1);
 
-  let emaValue = candles
-    .slice(0, period)
-    .reduce((sum, candle) => sum + candle.close, 0) / period;
+  let emaValue =
+    candles
+      .slice(0, period)
+      .reduce((sum, candle) => sum + candle.close, 0) / period;
 
   for (let i = period; i < candles.length; i++) {
     emaValue =
@@ -160,10 +162,6 @@ function calculateVWAP(candles) {
     const typicalPrice =
       (candle.high + candle.low + candle.close) / 3;
 
-    /*
-      Twelve Data may not provide volume for XAU/USD.
-      Therefore we use candle range as a weighting proxy.
-    */
     const weight =
       Math.max(candle.high - candle.low, 0.01);
 
@@ -263,10 +261,18 @@ function getRecentStructure(candles) {
     const current = candles[i];
 
     const recentHigh =
-      highest(candles, i - STRUCTURE_LOOKBACK, i);
+      highest(
+        candles,
+        i - STRUCTURE_LOOKBACK,
+        i
+      );
 
     const recentLow =
-      lowest(candles, i - STRUCTURE_LOOKBACK, i);
+      lowest(
+        candles,
+        i - STRUCTURE_LOOKBACK,
+        i
+      );
 
     const body =
       candleBodyPercentage(current);
@@ -305,8 +311,11 @@ function getRecentStructure(candles) {
 }
 
 function getTrend(candles) {
-  const ema20 = calculateEMA(candles, EMA_FAST);
-  const ema50 = calculateEMA(candles, EMA_SLOW);
+  const ema20 =
+    calculateEMA(candles, EMA_FAST);
+
+  const ema50 =
+    calculateEMA(candles, EMA_SLOW);
 
   const previousEMA20 =
     calculatePreviousEMA(candles, EMA_FAST);
@@ -386,13 +395,11 @@ function buildSignal(candles) {
   }
 
   /*
-    IMPORTANT:
-    The final candle from Twelve Data may still be forming.
-
-    We remove it so every signal is based only on a CLOSED candle.
-    This prevents repainting.
+    Use only CLOSED candles.
+    The newest Twelve Data candle may still be forming.
   */
-  const closed = candles.slice(0, -1);
+  const closed =
+    candles.slice(0, -1);
 
   if (closed.length < MIN_CANDLES - 1) {
     return {
@@ -404,11 +411,11 @@ function buildSignal(candles) {
   const current =
     closed[closed.length - 1];
 
-  const previous =
-    closed[closed.length - 2];
-
   const atr =
-    calculateATR(closed, ATR_PERIOD);
+    calculateATR(
+      closed,
+      ATR_PERIOD
+    );
 
   const vwap =
     calculateVWAP(closed);
@@ -425,12 +432,22 @@ function buildSignal(candles) {
   const structure =
     getRecentStructure(closed);
 
-  const buySweep = !!sweep.buy;
-  const sellSweep = !!sweep.sell;
+  const buySweep =
+    !!sweep.buy;
 
-  const buyStructure = !!structure.buy;
-  const sellStructure = !!structure.sell;
+  const sellSweep =
+    !!sweep.sell;
 
+  const buyStructure =
+    !!structure.buy;
+
+  const sellStructure =
+    !!structure.sell;
+
+  /*
+    Higher-frequency trigger:
+    Sweep OR recent structure.
+  */
   const buyTrigger =
     buySweep || buyStructure;
 
@@ -455,6 +472,12 @@ function buildSignal(candles) {
     atr !== null &&
     atr >= MIN_ATR;
 
+  /*
+    Require at least 2 of:
+    VWAP
+    Momentum
+    ATR
+  */
   const buySecondary =
     Number(vwapBuy) +
     Number(momentumBuy) +
@@ -541,7 +564,10 @@ function buildSignal(candles) {
     const recentSwingLow =
       lowest(
         closed,
-        Math.max(0, closed.length - 7),
+        Math.max(
+          0,
+          closed.length - 7
+        ),
         closed.length
       );
 
@@ -556,7 +582,9 @@ function buildSignal(candles) {
       );
 
     risk =
-      current.close - stopLoss;
+      current.close -
+      stopLoss;
+
   } else if (sellValid && !buyValid) {
     signal = "SELL";
 
@@ -567,7 +595,10 @@ function buildSignal(candles) {
     const recentSwingHigh =
       highest(
         closed,
-        Math.max(0, closed.length - 7),
+        Math.max(
+          0,
+          closed.length - 7
+        ),
         closed.length
       );
 
@@ -582,25 +613,28 @@ function buildSignal(candles) {
       );
 
     risk =
-      stopLoss - current.close;
+      stopLoss -
+      current.close;
+
   } else {
-    /*
-      If both sides somehow trigger on the same closed candle,
-      do not force a trade.
-    */
     return {
       signal: "WAITING",
       reason: "Conflicting BUY and SELL setups",
       candleTime: current.time,
+      setupAnchor: null,
       checks
     };
   }
 
-  if (!Number.isFinite(risk) || risk <= 0) {
+  if (
+    !Number.isFinite(risk) ||
+    risk <= 0
+  ) {
     return {
       signal: "WAITING",
       reason: "Invalid risk distance",
       candleTime: current.time,
+      setupAnchor: null,
       checks
     };
   }
@@ -614,14 +648,19 @@ function buildSignal(candles) {
       : entry - risk * TARGET_RR;
 
   const rr =
-    Math.abs(takeProfit - entry) /
-    Math.abs(entry - stopLoss);
+    Math.abs(
+      takeProfit - entry
+    ) /
+    Math.abs(
+      entry - stopLoss
+    );
 
   if (rr < MIN_RR) {
     return {
       signal: "WAITING",
       reason: "RR below minimum",
       candleTime: current.time,
+      setupAnchor: null,
       checks: {
         ...checks,
         rr: "WAIT"
@@ -629,16 +668,35 @@ function buildSignal(candles) {
     };
   }
 
-  checks.rr = "CONFIRMED";
+  checks.rr =
+    "CONFIRMED";
 
   return {
     signal,
-    entry: roundPrice(entry),
-    stopLoss: roundPrice(stopLoss),
-    takeProfit: roundPrice(takeProfit),
-    rr: Number(rr.toFixed(2)),
-    candleTime: current.time,
-    setupAnchor: setup ? setup.time : current.time,
+
+    entry:
+      roundPrice(entry),
+
+    stopLoss:
+      roundPrice(stopLoss),
+
+    takeProfit:
+      roundPrice(takeProfit),
+
+    rr:
+      Number(rr.toFixed(2)),
+
+    candleTime:
+      current.time,
+
+    /*
+      This identifies the actual setup.
+      Same setup = no repeated Telegram alert.
+    */
+    setupAnchor:
+      setup
+        ? setup.time
+        : current.time,
 
     checks,
 
@@ -668,7 +726,8 @@ function buildSignal(candles) {
           ? momentumBuy
           : momentumSell,
 
-      atr: atrConfirmed
+      atr:
+        atrConfirmed
     }
   };
 }
@@ -686,7 +745,9 @@ async function getCandles(env) {
     "&interval=5min" +
     "&outputsize=100" +
     "&apikey=" +
-    encodeURIComponent(env.TWELVE_DATA_API_KEY);
+    encodeURIComponent(
+      env.TWELVE_DATA_API_KEY
+    );
 
   const response =
     await fetch(url);
@@ -694,7 +755,10 @@ async function getCandles(env) {
   const data =
     await response.json();
 
-  if (!response.ok || data.status === "error") {
+  if (
+    !response.ok ||
+    data.status === "error"
+  ) {
     throw new Error(
       data.message ||
       "Twelve Data candle request failed."
@@ -707,10 +771,6 @@ async function getCandles(env) {
     );
   }
 
-  /*
-    Twelve Data normally returns newest first.
-    The signal engine needs oldest -> newest.
-  */
   return data.values
     .map(candle => ({
       time: candle.datetime,
@@ -739,7 +799,9 @@ async function getLivePrice(env) {
     "https://api.twelvedata.com/price" +
     "?symbol=XAU/USD" +
     "&apikey=" +
-    encodeURIComponent(env.TWELVE_DATA_API_KEY);
+    encodeURIComponent(
+      env.TWELVE_DATA_API_KEY
+    );
 
   const response =
     await fetch(url);
@@ -747,7 +809,10 @@ async function getLivePrice(env) {
   const data =
     await response.json();
 
-  if (!response.ok || data.status === "error") {
+  if (
+    !response.ok ||
+    data.status === "error"
+  ) {
     throw new Error(
       data.message ||
       "Twelve Data price request failed."
@@ -766,15 +831,16 @@ async function getLivePrice(env) {
   return roundPrice(price);
 }
 
-/*
-  Central Telegram request helper.
-  It NEVER returns the bot token.
-*/
-async function telegramRequest(env, method, body = {}) {
+async function telegramRequest(
+  env,
+  method,
+  body = {}
+) {
   if (!env.TELEGRAM_BOT_TOKEN) {
     return {
       ok: false,
-      error: "TELEGRAM_BOT_TOKEN is missing."
+      error:
+        "TELEGRAM_BOT_TOKEN is missing."
     };
   }
 
@@ -786,15 +852,18 @@ async function telegramRequest(env, method, body = {}) {
       await fetch(url, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type":
+            "application/json"
         },
-        body: JSON.stringify(body)
+        body:
+          JSON.stringify(body)
       });
 
     let data;
 
     try {
-      data = await response.json();
+      data =
+        await response.json();
     } catch {
       return {
         ok: false,
@@ -803,14 +872,18 @@ async function telegramRequest(env, method, body = {}) {
       };
     }
 
-    if (!response.ok || data.ok !== true) {
+    if (
+      !response.ok ||
+      data.ok !== true
+    ) {
       return {
         ok: false,
         error:
           data.description ||
           `Telegram returned HTTP ${response.status}.`,
         errorCode:
-          data.error_code || response.status
+          data.error_code ||
+          response.status
       };
     }
 
@@ -818,6 +891,7 @@ async function telegramRequest(env, method, body = {}) {
       ok: true,
       result: data.result
     };
+
   } catch (error) {
     return {
       ok: false,
@@ -828,30 +902,30 @@ async function telegramRequest(env, method, body = {}) {
   }
 }
 
-async function sendTelegram(env, signal) {
+async function sendTelegram(
+  env,
+  signal
+) {
   if (!env.TELEGRAM_BOT_TOKEN) {
     return {
       sent: false,
-      error: "TELEGRAM_BOT_TOKEN is missing."
+      error:
+        "TELEGRAM_BOT_TOKEN is missing."
     };
   }
 
   if (!env.TELEGRAM_CHAT_ID) {
     return {
       sent: false,
-      error: "TELEGRAM_CHAT_ID is missing."
+      error:
+        "TELEGRAM_CHAT_ID is missing."
     };
   }
-
-  const emoji =
-    signal.signal === "BUY"
-      ? "BUY"
-      : "SELL";
 
   const message =
 `XAU AI CHART
 
-${emoji} ${signal.signal} XAUUSD M5
+${signal.signal} XAUUSD M5
 
 Entry: ${signal.entry}
 SL: ${signal.stopLoss}
@@ -875,7 +949,10 @@ Non-repainting system.`;
       env,
       "sendMessage",
       {
-        chat_id: String(env.TELEGRAM_CHAT_ID),
+        chat_id:
+          String(
+            env.TELEGRAM_CHAT_ID
+          ),
         text: message
       }
     );
@@ -884,7 +961,8 @@ Non-repainting system.`;
     return {
       sent: false,
       error: result.error,
-      errorCode: result.errorCode || null
+      errorCode:
+        result.errorCode || null
     };
   }
 
@@ -895,18 +973,13 @@ Non-repainting system.`;
   };
 }
 
-/*
-  Direct Telegram test.
-
-  This lets us test Telegram immediately instead
-  of waiting for another valid XAUUSD signal.
-*/
 async function testTelegram(env) {
   if (!env.TELEGRAM_BOT_TOKEN) {
     return {
       ok: false,
       stage: "configuration",
-      error: "TELEGRAM_BOT_TOKEN is missing."
+      error:
+        "TELEGRAM_BOT_TOKEN is missing."
     };
   }
 
@@ -914,7 +987,8 @@ async function testTelegram(env) {
     return {
       ok: false,
       stage: "configuration",
-      error: "TELEGRAM_CHAT_ID is missing."
+      error:
+        "TELEGRAM_CHAT_ID is missing."
     };
   }
 
@@ -929,14 +1003,20 @@ async function testTelegram(env) {
       ok: false,
       stage: "getMe",
       error: bot.error,
-      errorCode: bot.errorCode || null
+      errorCode:
+        bot.errorCode || null
     };
   }
 
   const botInfo = {
-    id: bot.result?.id || null,
-    username: bot.result?.username || null,
-    firstName: bot.result?.first_name || null
+    id:
+      bot.result?.id || null,
+
+    username:
+      bot.result?.username || null,
+
+    firstName:
+      bot.result?.first_name || null
   };
 
   const message =
@@ -953,7 +1033,10 @@ Your Telegram alerts are connected and ready.`;
       env,
       "sendMessage",
       {
-        chat_id: String(env.TELEGRAM_CHAT_ID),
+        chat_id:
+          String(
+            env.TELEGRAM_CHAT_ID
+          ),
         text: message
       }
     );
@@ -964,7 +1047,8 @@ Your Telegram alerts are connected and ready.`;
       stage: "sendMessage",
       bot: botInfo,
       error: sent.error,
-      errorCode: sent.errorCode || null
+      errorCode:
+        sent.errorCode || null
     };
   }
 
@@ -987,7 +1071,9 @@ async function getDailySignalCount(env) {
   const value =
     await env.SIGNAL_CACHE.get(key);
 
-  return Number(value || 0);
+  return Number(
+    value || 0
+  );
 }
 
 async function incrementDailySignalCount(env) {
@@ -1010,13 +1096,43 @@ async function incrementDailySignalCount(env) {
   );
 }
 
+/*
+  Every valid setup gets one deterministic ID.
+
+  Example:
+  signal-SELL-2026-09-11 00:15:00
+
+  Same setup = same ID.
+*/
+function getSignalId(signal) {
+  return (
+    `${signal.signal}-${signal.setupAnchor}`
+  );
+}
+
+function getSentKey(signal) {
+  return (
+    `signal-sent-${getSignalId(signal)}`
+  );
+}
+
+function getClaimKey(signal) {
+  return (
+    `signal-claim-${getSignalId(signal)}`
+  );
+}
+
+/*
+  Check whether this setup has already
+  successfully sent a Telegram alert.
+*/
 async function alreadySent(env, signal) {
   if (!env.SIGNAL_CACHE) {
     return false;
   }
 
   const key =
-    `signal-${signal.signal}-${signal.setupAnchor}`;
+    getSentKey(signal);
 
   const value =
     await env.SIGNAL_CACHE.get(key);
@@ -1024,30 +1140,99 @@ async function alreadySent(env, signal) {
   return !!value;
 }
 
+/*
+  Claim the setup BEFORE sending Telegram.
+
+  This prevents multiple scans from all
+  sending the same signal at the same time.
+*/
+async function claimSignal(env, signal) {
+  if (!env.SIGNAL_CACHE) {
+    return true;
+  }
+
+  const sentKey =
+    getSentKey(signal);
+
+  const claimKey =
+    getClaimKey(signal);
+
+  const alreadyDone =
+    await env.SIGNAL_CACHE.get(
+      sentKey
+    );
+
+  if (alreadyDone) {
+    return false;
+  }
+
+  const existingClaim =
+    await env.SIGNAL_CACHE.get(
+      claimKey
+    );
+
+  if (existingClaim) {
+    return false;
+  }
+
+  /*
+    Create a short-lived claim.
+    This blocks another scan from
+    sending the same setup immediately.
+  */
+  await env.SIGNAL_CACHE.put(
+    claimKey,
+    "claimed",
+    {
+      expirationTtl:
+        SIGNAL_CLAIM_TTL
+    }
+  );
+
+  return true;
+}
+
 async function markSent(env, signal) {
   if (!env.SIGNAL_CACHE) {
     return;
   }
 
-  const key =
-    `signal-${signal.signal}-${signal.setupAnchor}`;
+  const sentKey =
+    getSentKey(signal);
 
   await env.SIGNAL_CACHE.put(
-    key,
+    sentKey,
     "sent",
     {
-      expirationTtl: SIGNAL_TTL
+      expirationTtl:
+        SIGNAL_TTL
     }
   );
 }
 
-async function scanAndNotify(env) {
-  const candles =
-    await getCandles(env);
+async function releaseClaim(env, signal) {
+  if (!env.SIGNAL_CACHE) {
+    return;
+  }
 
-  const signal =
-    buildSignal(candles);
+  const claimKey =
+    getClaimKey(signal);
 
+  await env.SIGNAL_CACHE.delete(
+    claimKey
+  );
+}
+
+/*
+  Process an already-built signal.
+
+  This is the ONLY place where automatic
+  Telegram notifications are sent.
+*/
+async function processSignal(
+  env,
+  signal
+) {
   if (
     signal.signal !== "BUY" &&
     signal.signal !== "SELL"
@@ -1062,13 +1247,17 @@ async function scanAndNotify(env) {
   const dailyCount =
     await getDailySignalCount(env);
 
-  if (dailyCount >= MAX_SIGNALS_PER_DAY) {
+  if (
+    dailyCount >=
+    MAX_SIGNALS_PER_DAY
+  ) {
     return {
       ok: true,
       ...signal,
       telegramSent: false,
       telegramError: null,
-      blocked: "MAX_SIGNALS_PER_DAY"
+      blocked:
+        "MAX_SIGNALS_PER_DAY"
     };
   }
 
@@ -1088,19 +1277,32 @@ async function scanAndNotify(env) {
     };
   }
 
+  /*
+    Claim BEFORE Telegram send.
+  */
+  const claimed =
+    await claimSignal(
+      env,
+      signal
+    );
+
+  if (!claimed) {
+    return {
+      ok: true,
+      ...signal,
+      telegramSent: false,
+      telegramError: null,
+      duplicate: true,
+      claimedByAnotherScan: true
+    };
+  }
+
   const telegram =
     await sendTelegram(
       env,
       signal
     );
 
-  /*
-    Only mark the signal as sent AFTER Telegram
-    confirms successful delivery.
-
-    This means failed Telegram attempts can be
-    retried, while successful signals cannot repeat.
-  */
   if (telegram.sent) {
     await markSent(
       env,
@@ -1110,16 +1312,51 @@ async function scanAndNotify(env) {
     await incrementDailySignalCount(
       env
     );
+
+    return {
+      ok: true,
+      ...signal,
+      telegramSent: true,
+      telegramError: null,
+      telegramErrorCode: null
+    };
   }
+
+  /*
+    Telegram failed.
+    Release the claim so the next Cron
+    run can try again.
+  */
+  await releaseClaim(
+    env,
+    signal
+  );
 
   return {
     ok: true,
     ...signal,
-    telegramSent: telegram.sent,
-    telegramError: telegram.error || null,
+    telegramSent: false,
+    telegramError:
+      telegram.error || null,
     telegramErrorCode:
       telegram.errorCode || null
   };
+}
+
+/*
+  Automatic Cron scanner.
+*/
+async function scanAndNotify(env) {
+  const candles =
+    await getCandles(env);
+
+  const signal =
+    buildSignal(candles);
+
+  return processSignal(
+    env,
+    signal
+  );
 }
 
 export default {
@@ -1137,7 +1374,8 @@ export default {
       if (url.pathname === "/") {
         return json({
           ok: true,
-          service: "XAU AI CHART API",
+          service:
+            "XAU AI CHART API",
           status: "online"
         });
       }
@@ -1145,7 +1383,8 @@ export default {
       if (url.pathname === "/api/status") {
         return json({
           ok: true,
-          service: "XAU AI CHART API",
+          service:
+            "XAU AI CHART API",
           status: "online",
           market: "XAUUSD",
           timeframe: "M5",
@@ -1156,11 +1395,18 @@ export default {
             !!env.TELEGRAM_BOT_TOKEN &&
             !!env.TELEGRAM_CHAT_ID,
           telegramTest: true,
+
           signalEngine:
             "Higher-frequency Sweep OR Structure + EMA + 2/3 confirmation",
-          priceSource: "Twelve Data",
+
+          priceSource:
+            "Twelve Data",
+
           maxSignalsPerDay:
-            MAX_SIGNALS_PER_DAY
+            MAX_SIGNALS_PER_DAY,
+
+          notificationMode:
+            "Cron-only automatic Telegram"
         });
       }
 
@@ -1172,7 +1418,8 @@ export default {
           ok: true,
           symbol: "XAUUSD",
           price,
-          source: "Twelve Data"
+          source:
+            "Twelve Data"
         });
       }
 
@@ -1188,37 +1435,77 @@ export default {
         });
       }
 
+      /*
+        IMPORTANT:
+
+        /api/scan now ONLY reads/scans the market.
+
+        It does NOT send Telegram by default.
+
+        This means your website can refresh
+        every 15 seconds without producing
+        duplicate Telegram alerts.
+
+        If you specifically want to manually
+        trigger a Telegram signal, use:
+
+        /api/scan?notify=1
+      */
       if (url.pathname === "/api/scan") {
+        const candles =
+          await getCandles(env);
+
+        const signal =
+          buildSignal(candles);
+
+        const notify =
+          url.searchParams.get(
+            "notify"
+          ) === "1";
+
+        if (!notify) {
+          return json({
+            ok: true,
+            ...signal,
+            telegramSent: false,
+            notificationMode:
+              "Cron-only"
+          });
+        }
+
         const result =
-          await scanAndNotify(env);
+          await processSignal(
+            env,
+            signal
+          );
 
         return json(result);
       }
 
-      /*
-        NEW:
-        Open /api/telegram-test in your browser.
-
-        It checks the Telegram bot and sends one
-        test message to your configured chat.
-      */
-      if (url.pathname === "/api/telegram-test") {
+      if (
+        url.pathname ===
+        "/api/telegram-test"
+      ) {
         const result =
           await testTelegram(env);
 
         return json(
           result,
-          result.ok ? 200 : 400
+          result.ok
+            ? 200
+            : 400
         );
       }
 
       return json(
         {
           ok: false,
-          error: "Endpoint not found."
+          error:
+            "Endpoint not found."
         },
         404
       );
+
     } catch (error) {
       return json(
         {
@@ -1232,13 +1519,22 @@ export default {
     }
   },
 
-  async scheduled(event, env, ctx) {
+  /*
+    Cloudflare Cron:
+    This is now the automatic Telegram
+    notification engine.
+  */
+  async scheduled(
+    event,
+    env,
+    ctx
+  ) {
     ctx.waitUntil(
       scanAndNotify(env)
         .catch(() => {
           /*
-            Keep the scheduled Worker alive even if
-            one scan fails. The next Cron run will retry.
+            If one scan fails, the next
+            Cron run will try again.
           */
         })
     );
