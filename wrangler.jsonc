@@ -17,12 +17,10 @@
     ]
   },
 
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": [
-        "XAUSetupLock"
-      ]
+  "exports": {
+    "XAUSetupLock": {
+      "type": "durable-object",
+      "storage": "sqlite"
     }
-  ]
+  }
 }
