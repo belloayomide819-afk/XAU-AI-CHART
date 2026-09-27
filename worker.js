@@ -6,21 +6,69 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type"
 };
 
-const MIN_CANDLES = 60;
-const LOOKBACK = 10;
-const STRUCTURE_LOOKBACK = 5;
+/*
+  =====================================================
+  XAU AI CHART
+  Pine kNN Alert Engine
+  =====================================================
 
-const ATR_PERIOD = 14;
-const EMA_FAST = 20;
-const EMA_SLOW = 50;
+  Based on the original Pine script:
 
-const MIN_ATR = 0.20;
-const ATR_SL_MULTIPLIER = 1.10;
+  K          = 63
+  k          = floor(sqrt(63)) = 7
+  Indicator  = All
+  Fast       = 14
+  Slow       = 28
+  Filter     = Both
+  Holding    = 1
+  Threshold  = 99.9
 
-const MIN_RR = 2.0;
-const TARGET_RR = 2.5;
+  Telegram sends ONLY:
+
+  XAU AI CHART
+
+  🟢 BUY XAUUSD
+
+  OR
+
+  XAU AI CHART
+
+  🔴 SELL XAUUSD
+*/
+
+const TIMEFRAME = "45min";
+
+const K = 63;
+const KNN_K = Math.floor(Math.sqrt(K));
+
+const FAST = 14;
+const SLOW = 28;
+
+const HOLDING_PERIOD = 1;
+const TIME_THRESHOLD = 99.9;
 
 const REARM_CANDLES = 2;
+
+/*
+  We need enough history for:
+
+  RSI 28
+  CCI 28
+  ROC 28
+  MOM 28
+  scale(MOM,63)
+  ATR
+  HMA(volume RSI,10)
+
+  300 gives the engine enough historical data
+  to reconstruct the Pine state before evaluating
+  the newest closed candle.
+*/
+const OUTPUT_SIZE = 300;
+
+/* =====================================================
+   BASIC HELPERS
+===================================================== */
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -32,670 +80,1084 @@ function json(data, status = 200) {
   });
 }
 
-function roundPrice(value) {
-  return Number(Number(value).toFixed(2));
+function isFiniteNumber(v) {
+  return Number.isFinite(Number(v));
 }
 
-function bullish(c) {
-  return c.close > c.open;
-}
+/* =====================================================
+   PINE-LIKE MATH
+===================================================== */
 
-function bearish(c) {
-  return c.close < c.open;
-}
+function sma(values, period) {
+  if (values.length < period) return null;
 
-function candleBodyPercentage(c) {
-  const range = c.high - c.low;
-  if (range <= 0) return 0;
-  return Math.abs(c.close - c.open) / range * 100;
-}
+  let sum = 0;
 
-function highest(candles, start, end) {
-  let value = -Infinity;
+  for (
+    let i = values.length - period;
+    i < values.length;
+    i++
+  ) {
+    const v = values[i];
 
-  for (let i = start; i < end; i++) {
-    value = Math.max(value, candles[i].high);
+    if (!Number.isFinite(v)) {
+      return null;
+    }
+
+    sum += v;
   }
 
-  return value;
+  return sum / period;
 }
 
-function lowest(candles, start, end) {
-  let value = Infinity;
+function rma(values, period) {
+  if (values.length < period) return null;
 
-  for (let i = start; i < end; i++) {
-    value = Math.min(value, candles[i].low);
+  let firstSum = 0;
+
+  for (let i = 0; i < period; i++) {
+    if (!Number.isFinite(values[i])) {
+      return null;
+    }
+
+    firstSum += values[i];
   }
 
-  return value;
-}
+  let result = firstSum / period;
 
-function calculateEMA(candles, period) {
-  if (candles.length < period) return null;
+  for (let i = period; i < values.length; i++) {
+    if (!Number.isFinite(values[i])) {
+      return null;
+    }
 
-  const multiplier = 2 / (period + 1);
-
-  let ema =
-    candles
-      .slice(0, period)
-      .reduce((sum, c) => sum + c.close, 0) / period;
-
-  for (let i = period; i < candles.length; i++) {
-    ema =
-      (candles[i].close - ema) * multiplier + ema;
+    result =
+      ((result * (period - 1)) + values[i]) /
+      period;
   }
 
-  return ema;
+  return result;
 }
 
-function calculatePreviousEMA(candles, period) {
-  if (candles.length < period + 1) return null;
-  return calculateEMA(candles.slice(0, -1), period);
+function wma(values, period) {
+  if (values.length < period) return null;
+
+  let weightedSum = 0;
+  let weightTotal = 0;
+  let weight = 1;
+
+  for (
+    let i = values.length - period;
+    i < values.length;
+    i++
+  ) {
+    const v = values[i];
+
+    if (!Number.isFinite(v)) {
+      return null;
+    }
+
+    weightedSum += v * weight;
+    weightTotal += weight;
+    weight++;
+  }
+
+  return weightedSum / weightTotal;
 }
 
-function calculateATR(candles, period) {
-  if (candles.length < period + 1) return null;
+function hma(values, period) {
+  if (values.length < period) return null;
 
-  const trs = [];
+  const half = Math.max(
+    1,
+    Math.floor(period / 2)
+  );
 
-  for (let i = 1; i < candles.length; i++) {
-    const current = candles[i];
-    const previous = candles[i - 1];
+  const root = Math.max(
+    1,
+    Math.floor(Math.sqrt(period))
+  );
 
-    trs.push(
-      Math.max(
-        current.high - current.low,
-        Math.abs(current.high - previous.close),
-        Math.abs(current.low - previous.close)
-      )
+  const raw = [];
+
+  /*
+    Reconstruct WMA(half) and WMA(period)
+    for each usable point.
+  */
+  for (
+    let i = period - 1;
+    i < values.length;
+    i++
+  ) {
+    const windowHalf =
+      values.slice(
+        i - half + 1,
+        i + 1
+      );
+
+    const windowFull =
+      values.slice(
+        i - period + 1,
+        i + 1
+      );
+
+    const wh =
+      wma(windowHalf, half);
+
+    const wf =
+      wma(windowFull, period);
+
+    if (
+      wh === null ||
+      wf === null
+    ) {
+      raw.push(null);
+    } else {
+      raw.push(
+        2 * wh - wf
+      );
+    }
+  }
+
+  /*
+    Pine HMA is WMA of the raw series.
+  */
+  const validRaw =
+    raw.filter(
+      v => Number.isFinite(v)
+    );
+
+  return wma(
+    validRaw,
+    root
+  );
+}
+
+/* =====================================================
+   RSI
+===================================================== */
+
+function calculateRSI(series, period) {
+  if (series.length < period + 1) {
+    return null;
+  }
+
+  const gains = [];
+  const losses = [];
+
+  for (let i = 1; i < series.length; i++) {
+    const change =
+      series[i] - series[i - 1];
+
+    gains.push(
+      Math.max(change, 0)
+    );
+
+    losses.push(
+      Math.max(-change, 0)
     );
   }
 
-  if (trs.length < period) return null;
+  const avgGain =
+    rma(gains, period);
 
-  let atr =
-    trs
-      .slice(0, period)
-      .reduce((sum, v) => sum + v, 0) / period;
+  const avgLoss =
+    rma(losses, period);
 
-  for (let i = period; i < trs.length; i++) {
-    atr =
-      ((atr * (period - 1)) + trs[i]) / period;
+  if (
+    avgGain === null ||
+    avgLoss === null
+  ) {
+    return null;
   }
 
-  return atr;
-}
-
-function calculateVWAP(candles) {
-  if (!candles.length) return null;
-
-  let totalPrice = 0;
-  let totalWeight = 0;
-
-  for (const c of candles) {
-    const typical =
-      (c.high + c.low + c.close) / 3;
-
-    const weight =
-      Math.max(c.high - c.low, 0.01);
-
-    totalPrice += typical * weight;
-    totalWeight += weight;
+  if (avgLoss === 0) {
+    return 100;
   }
 
-  return totalWeight > 0
-    ? totalPrice / totalWeight
-    : null;
+  const rs =
+    avgGain / avgLoss;
+
+  return 100 -
+    (100 / (1 + rs));
 }
 
-/*
-  FRESH LIQUIDITY SWEEP
+/* =====================================================
+   ROC
+===================================================== */
 
-  BUY:
-  current candle takes previous lows,
-  then closes back above that low.
-
-  SELL:
-  current candle takes previous highs,
-  then closes back below that high.
-*/
-function getCurrentSweep(candles) {
-  if (candles.length < LOOKBACK + 1) {
-    return { buy: null, sell: null };
-  }
-
-  const i = candles.length - 1;
-  const current = candles[i];
-
-  const previousLow =
-    lowest(candles, i - LOOKBACK, i);
-
-  const previousHigh =
-    highest(candles, i - LOOKBACK, i);
-
-  const body =
-    candleBodyPercentage(current);
-
-  const buy =
-    current.low < previousLow &&
-    current.close > previousLow &&
-    bullish(current) &&
-    body >= 35;
-
-  const sell =
-    current.high > previousHigh &&
-    current.close < previousHigh &&
-    bearish(current) &&
-    body >= 35;
-
-  return {
-    buy: buy
-      ? {
-          time: current.time,
-          level: previousLow
-        }
-      : null,
-
-    sell: sell
-      ? {
-          time: current.time,
-          level: previousHigh
-        }
-      : null
-  };
-}
-
-/*
-  FRESH STRUCTURE BREAK
-
-  Only the newest closed candle is allowed
-  to create a new structure signal.
-*/
-function getCurrentStructure(candles) {
-  if (candles.length < STRUCTURE_LOOKBACK + 1) {
-    return { buy: null, sell: null };
-  }
-
-  const i = candles.length - 1;
-  const current = candles[i];
-
-  const recentHigh =
-    highest(
-      candles,
-      i - STRUCTURE_LOOKBACK,
-      i
-    );
-
-  const recentLow =
-    lowest(
-      candles,
-      i - STRUCTURE_LOOKBACK,
-      i
-    );
-
-  const body =
-    candleBodyPercentage(current);
-
-  const buy =
-    current.close > recentHigh &&
-    bullish(current) &&
-    body >= 35;
-
-  const sell =
-    current.close < recentLow &&
-    bearish(current) &&
-    body >= 35;
-
-  return {
-    buy: buy
-      ? {
-          time: current.time,
-          level: recentHigh
-        }
-      : null,
-
-    sell: sell
-      ? {
-          time: current.time,
-          level: recentLow
-        }
-      : null
-  };
-}
-
-/*
-  BALANCED TREND
-
-  We do NOT require EMA20 to be rising/falling.
-  That was one reason BUY setups were being rejected.
-
-  The main direction comes from EMA20 vs EMA50.
-*/
-function getTrend(candles) {
-  const ema20 =
-    calculateEMA(candles, EMA_FAST);
-
-  const ema50 =
-    calculateEMA(candles, EMA_SLOW);
-
-  if (ema20 === null || ema50 === null) {
-    return {
-      buy: false,
-      sell: false,
-      ema20: null,
-      ema50: null
-    };
-  }
-
-  return {
-    buy: ema20 > ema50,
-    sell: ema20 < ema50,
-    ema20,
-    ema50
-  };
-}
-
-function getMomentum(candles) {
-  if (candles.length < 4) {
-    return {
-      buy: false,
-      sell: false
-    };
+function calculateROC(series, period) {
+  if (series.length <= period) {
+    return null;
   }
 
   const current =
-    candles[candles.length - 1];
+    series[series.length - 1];
 
   const previous =
-    candles[candles.length - 2];
+    series[
+      series.length - 1 - period
+    ];
 
-  const older =
-    candles[candles.length - 4];
+  if (
+    !Number.isFinite(current) ||
+    !Number.isFinite(previous) ||
+    previous === 0
+  ) {
+    return null;
+  }
+
+  return (
+    (current - previous) /
+    previous
+  ) * 100;
+}
+
+/* =====================================================
+   CCI
+===================================================== */
+
+function calculateCCI(
+  highs,
+  lows,
+  closes,
+  period
+) {
+  if (closes.length < period) {
+    return null;
+  }
+
+  const typical = [];
+
+  for (
+    let i = 0;
+    i < closes.length;
+    i++
+  ) {
+    typical.push(
+      (
+        highs[i] +
+        lows[i] +
+        closes[i]
+      ) / 3
+    );
+  }
+
+  const current =
+    typical[
+      typical.length - 1
+    ];
+
+  const window =
+    typical.slice(
+      -period
+    );
+
+  const mean =
+    window.reduce(
+      (sum, v) => sum + v,
+      0
+    ) / period;
+
+  let deviation = 0;
+
+  for (const value of window) {
+    deviation +=
+      Math.abs(value - mean);
+  }
+
+  deviation /=
+    period;
+
+  if (deviation === 0) {
+    return 0;
+  }
+
+  return (
+    (current - mean) /
+    (0.015 * deviation)
+  );
+}
+
+/* =====================================================
+   MOMENTUM
+===================================================== */
+
+function calculateMOM(
+  closes,
+  period
+) {
+  if (closes.length <= period) {
+    return null;
+  }
+
+  return (
+    closes[closes.length - 1] -
+    closes[
+      closes.length - 1 - period
+    ]
+  );
+}
+
+/* =====================================================
+   PINE SCALE
+===================================================== */
+
+function calculateScale(
+  values,
+  period
+) {
+  if (values.length < period) {
+    return null;
+  }
+
+  const window =
+    values.slice(-period);
+
+  if (
+    window.some(
+      v => !Number.isFinite(v)
+    )
+  ) {
+    return null;
+  }
+
+  let low = Infinity;
+  let high = -Infinity;
+
+  for (const v of window) {
+    low =
+      Math.min(low, v);
+
+    high =
+      Math.max(high, v);
+  }
+
+  if (high === low) {
+    return null;
+  }
+
+  return (
+    (values[values.length - 1] - low) /
+    (high - low)
+  ) * 100;
+}
+
+/* =====================================================
+   ATR
+===================================================== */
+
+function calculateATRSeries(
+  candles,
+  period
+) {
+  if (candles.length < period + 1) {
+    return null;
+  }
+
+  const trs = [];
+
+  for (
+    let i = 1;
+    i < candles.length;
+    i++
+  ) {
+    const current =
+      candles[i];
+
+    const previous =
+      candles[i - 1];
+
+    const tr =
+      Math.max(
+        current.high -
+          current.low,
+
+        Math.abs(
+          current.high -
+          previous.close
+        ),
+
+        Math.abs(
+          current.low -
+          previous.close
+        )
+      );
+
+    trs.push(tr);
+  }
+
+  return rma(
+    trs,
+    period
+  );
+}
+
+/* =====================================================
+   VOLUME BREAK
+   Pine:
+
+   rsivol = rsi(volume,14)
+   osc    = hma(rsivol,10)
+   osc > 49
+===================================================== */
+
+function calculateVolumeBreak(
+  candles
+) {
+  const volumes =
+    candles.map(
+      c => c.volume
+    );
+
+  if (
+    volumes.length < 30 ||
+    volumes.some(
+      v => !Number.isFinite(v)
+    )
+  ) {
+    return null;
+  }
+
+  const rsiValues = [];
+
+  /*
+    Build RSI(volume,14) as a series.
+  */
+  for (
+    let i = 0;
+    i < volumes.length;
+    i++
+  ) {
+    const value =
+      calculateRSI(
+        volumes.slice(
+          0,
+          i + 1
+        ),
+        14
+      );
+
+    rsiValues.push(value);
+  }
+
+  const validRSI =
+    rsiValues.filter(
+      v => Number.isFinite(v)
+    );
+
+  if (validRSI.length < 20) {
+    return null;
+  }
+
+  const osc =
+    hma(
+      validRSI,
+      10
+    );
+
+  if (!Number.isFinite(osc)) {
+    return null;
+  }
+
+  return osc > 49;
+}
+
+/* =====================================================
+   VOLATILITY BREAK
+
+   Pine:
+
+   atr(1) > atr(10)
+===================================================== */
+
+function calculateVolatilityBreak(
+  candles
+) {
+  const atr1 =
+    calculateATRSeries(
+      candles,
+      1
+    );
+
+  const atr10 =
+    calculateATRSeries(
+      candles,
+      10
+    );
+
+  if (
+    atr1 === null ||
+    atr10 === null
+  ) {
+    return null;
+  }
+
+  return atr1 > atr10;
+}
+
+/* =====================================================
+   FEATURE CALCULATION
+
+   Pine:
+
+   rs = rsi(close, slow)
+   rf = rsi(close, fast)
+
+   cs = cci(close, slow)
+   cf = cci(close, fast)
+
+   os = roc(close, slow)
+   of = roc(close, fast)
+
+   ms = scale(mom(close, slow),63)*100
+   mf = scale(mom(close, fast),63)*100
+
+   f1 = avg(rs,os,cs,ms)
+   f2 = avg(rf,of,cf,mf)
+===================================================== */
+
+function average(values) {
+  const valid =
+    values.filter(
+      v => Number.isFinite(v)
+    );
+
+  if (!valid.length) {
+    return null;
+  }
+
+  return (
+    valid.reduce(
+      (sum, v) => sum + v,
+      0
+    ) / valid.length
+  );
+}
+
+function calculateFeatures(
+  candles,
+  index
+) {
+  const history =
+    candles.slice(
+      0,
+      index + 1
+    );
+
+  const closes =
+    history.map(
+      c => c.close
+    );
+
+  const highs =
+    history.map(
+      c => c.high
+    );
+
+  const lows =
+    history.map(
+      c => c.low
+    );
+
+  const rs =
+    calculateRSI(
+      closes,
+      SLOW
+    );
+
+  const rf =
+    calculateRSI(
+      closes,
+      FAST
+    );
+
+  const cs =
+    calculateCCI(
+      highs,
+      lows,
+      closes,
+      SLOW
+    );
+
+  const cf =
+    calculateCCI(
+      highs,
+      lows,
+      closes,
+      FAST
+    );
+
+  const os =
+    calculateROC(
+      closes,
+      SLOW
+    );
+
+  const of =
+    calculateROC(
+      closes,
+      FAST
+    );
+
+  const slowMomSeries = [];
+
+  const fastMomSeries = [];
+
+  for (
+    let i = 0;
+    i < closes.length;
+    i++
+  ) {
+    if (i >= SLOW) {
+      slowMomSeries.push(
+        closes[i] -
+        closes[i - SLOW]
+      );
+    }
+  }
+
+  for (
+    let i = 0;
+    i < closes.length;
+    i++
+  ) {
+    if (i >= FAST) {
+      fastMomSeries.push(
+        closes[i] -
+        closes[i - FAST]
+      );
+    }
+  }
+
+  const ms =
+    calculateScale(
+      slowMomSeries,
+      63
+    );
+
+  const mf =
+    calculateScale(
+      fastMomSeries,
+      63
+    );
+
+  const f1 =
+    average([
+      rs,
+      os,
+      cs,
+      ms
+    ]);
+
+  const f2 =
+    average([
+      rf,
+      of,
+      cf,
+      mf
+    ]);
 
   return {
-    buy:
-      current.close > previous.close &&
-      previous.close > older.close,
-
-    sell:
-      current.close < previous.close &&
-      previous.close < older.close
+    f1,
+    f2
   };
 }
 
-/*
-  BUILD SIGNAL
+/* =====================================================
+   KNN PREDICTION
 
-  No forced trade.
-  No repainting.
-  Closed candles only.
+   THIS FOLLOWS THE ORIGINAL PINE LOOP.
+
+   prediction array is persistent.
+   Maximum size = 7.
+===================================================== */
+
+function calculateKNN(
+  feature1,
+  feature2,
+  directions,
+  predictions
+) {
+  let maxdist = -999;
+
+  const size =
+    directions.length;
+
+  for (
+    let i = 0;
+    i < size;
+    i++
+  ) {
+    const d =
+      Math.sqrt(
+        Math.pow(
+          feature1 -
+            feature1History[i],
+          2
+        ) +
+        Math.pow(
+          feature2 -
+            feature2History[i],
+          2
+        )
+      );
+
+    if (d > maxdist) {
+      maxdist = d;
+
+      if (
+        predictions.length >=
+        KNN_K
+      ) {
+        predictions.shift();
+      }
+
+      predictions.push(
+        directions[i]
+      );
+    }
+  }
+
+  return predictions.reduce(
+    (sum, value) =>
+      sum + value,
+    0
+  );
+}
+
+/*
+  These are intentionally module-level only
+  while one scan is running.
 */
-function buildSignal(candles) {
-  if (candles.length < MIN_CANDLES) {
+let feature1History = [];
+let feature2History = [];
+
+/* =====================================================
+   BUILD PINE SIGNAL
+
+   We replay historical candles sequentially
+   so the persistent Pine arrays can be recreated.
+===================================================== */
+
+function buildSignal(
+  candles
+) {
+  if (
+    candles.length < 100
+  ) {
     return {
       signal: "WAITING",
-      reason: "Not enough candles"
+      reason:
+        "Not enough candles"
     };
   }
 
   /*
-    Remove the currently forming candle.
+    Remove currently forming candle.
+
+    The original Pine alert is evaluated on
+    the current bar. For our scheduled worker,
+    the newest candle used here is closed.
   */
   const closed =
     candles.slice(0, -1);
 
-  if (closed.length < MIN_CANDLES - 1) {
-    return {
-      signal: "WAITING",
-      reason: "Not enough closed candles"
-    };
-  }
-
-  const current =
-    closed[closed.length - 1];
-
-  const atr =
-    calculateATR(
-      closed,
-      ATR_PERIOD
-    );
-
-  const vwap =
-    calculateVWAP(closed);
-
-  const trend =
-    getTrend(closed);
-
-  const momentum =
-    getMomentum(closed);
-
-  const sweep =
-    getCurrentSweep(closed);
-
-  const structure =
-    getCurrentStructure(closed);
-
-  const buySweep =
-    !!sweep.buy;
-
-  const sellSweep =
-    !!sweep.sell;
-
-  const buyStructure =
-    !!structure.buy;
-
-  const sellStructure =
-    !!structure.sell;
-
-  /*
-    A trade must have a fresh trigger.
-  */
-  const buyTrigger =
-    buySweep || buyStructure;
-
-  const sellTrigger =
-    sellSweep || sellStructure;
-
-  const vwapBuy =
-    vwap !== null &&
-    current.close > vwap;
-
-  const vwapSell =
-    vwap !== null &&
-    current.close < vwap;
-
-  const momentumBuy =
-    momentum.buy;
-
-  const momentumSell =
-    momentum.sell;
-
-  const atrConfirmed =
-    atr !== null &&
-    atr >= MIN_ATR;
-
-  const buySecondary =
-    Number(vwapBuy) +
-    Number(momentumBuy) +
-    Number(atrConfirmed);
-
-  const sellSecondary =
-    Number(vwapSell) +
-    Number(momentumSell) +
-    Number(atrConfirmed);
-
-  /*
-    Require:
-      fresh trigger
-      correct EMA side
-      2 of 3 secondary confirmations
-  */
-  const buyValid =
-    buyTrigger &&
-    trend.buy &&
-    buySecondary >= 2;
-
-  const sellValid =
-    sellTrigger &&
-    trend.sell &&
-    sellSecondary >= 2;
-
-  const checks = {
-    sweep:
-      buySweep || sellSweep
-        ? "CONFIRMED"
-        : "WAIT",
-
-    structure:
-      buyStructure || sellStructure
-        ? "CONFIRMED"
-        : "WAIT",
-
-    ema:
-      trend.buy || trend.sell
-        ? "CONFIRMED"
-        : "WAIT",
-
-    vwap:
-      vwapBuy || vwapSell
-        ? "CONFIRMED"
-        : "WAIT",
-
-    momentum:
-      momentumBuy || momentumSell
-        ? "CONFIRMED"
-        : "WAIT",
-
-    atr:
-      atrConfirmed
-        ? "CONFIRMED"
-        : "WAIT",
-
-    rr: "WAIT",
-
-    candleClose: "CONFIRMED",
-
-    nonRepainting: "ACTIVE"
-  };
-
-  /*
-    Never force a trade.
-  */
-  if (!buyValid && !sellValid) {
-    return {
-      signal: "WAITING",
-
-      entry: null,
-      stopLoss: null,
-      takeProfit: null,
-      rr: null,
-
-      candleTime:
-        current.time,
-
-      setupAnchor: null,
-
-      checks
-    };
-  }
-
-  /*
-    If both directions somehow qualify
-    on the same candle, stay out.
-  */
-  if (buyValid && sellValid) {
-    return {
-      signal: "WAITING",
-
-      reason:
-        "Conflicting BUY and SELL setups",
-
-      candleTime:
-        current.time,
-
-      setupAnchor: null,
-
-      checks
-    };
-  }
-
-  let signal;
-  let setup;
-  let stopLoss;
-  let risk;
-
-  if (buyValid) {
-    signal = "BUY";
-
-    setup =
-      sweep.buy ||
-      structure.buy;
-
-    const recentSwingLow =
-      lowest(
-        closed,
-        Math.max(
-          0,
-          closed.length - 7
-        ),
-        closed.length
-      );
-
-    const atrStop =
-      current.close -
-      atr * ATR_SL_MULTIPLIER;
-
-    stopLoss =
-      Math.min(
-        recentSwingLow,
-        atrStop
-      );
-
-    risk =
-      current.close -
-      stopLoss;
-
-  } else {
-    signal = "SELL";
-
-    setup =
-      sweep.sell ||
-      structure.sell;
-
-    const recentSwingHigh =
-      highest(
-        closed,
-        Math.max(
-          0,
-          closed.length - 7
-        ),
-        closed.length
-      );
-
-    const atrStop =
-      current.close +
-      atr * ATR_SL_MULTIPLIER;
-
-    stopLoss =
-      Math.max(
-        recentSwingHigh,
-        atrStop
-      );
-
-    risk =
-      stopLoss -
-      current.close;
-  }
-
   if (
-    !Number.isFinite(risk) ||
-    risk <= 0
+    closed.length < 100
   ) {
     return {
       signal: "WAITING",
-
       reason:
-        "Invalid risk distance",
-
-      candleTime:
-        current.time,
-
-      setupAnchor: null,
-
-      checks
+        "Not enough closed candles"
     };
   }
 
-  const entry =
-    current.close;
+  feature1History = [];
+  feature2History = [];
 
-  const takeProfit =
-    signal === "BUY"
-      ? entry + risk * TARGET_RR
-      : entry - risk * TARGET_RR;
+  const directions = [];
+  const predictions = [];
 
-  const rr =
-    Math.abs(
-      takeProfit - entry
-    ) /
-    Math.abs(
-      entry - stopLoss
-    );
+  let previousSignal = 0;
+  let hpCounter = 0;
 
-  if (rr < MIN_RR) {
+  let latestAlert =
+    null;
+
+  /*
+    Replay every closed candle.
+  */
+  for (
+    let index = 0;
+    index < closed.length;
+    index++
+  ) {
+    const candle =
+      closed[index];
+
+    /*
+      Pine feature values.
+    */
+    const features =
+      calculateFeatures(
+        closed,
+        index
+      );
+
+    /*
+      Pine:
+
+      class =
+        close[1]<close[0] ? SELL :
+        close[1]>close[0] ? BUY :
+        HOLD
+    */
+    let direction = 0;
+
+    if (index > 0) {
+      if (
+        closed[index - 1].close <
+        candle.close
+      ) {
+        direction = -1;
+      } else if (
+        closed[index - 1].close >
+        candle.close
+      ) {
+        direction = 1;
+      }
+    }
+
+    /*
+      Pine arrays are pushed BEFORE the kNN loop.
+    */
+    if (
+      Number.isFinite(features.f1) &&
+      Number.isFinite(features.f2)
+    ) {
+      feature1History.push(
+        features.f1
+      );
+
+      feature2History.push(
+        features.f2
+      );
+
+      directions.push(
+        direction
+      );
+    }
+
+    /*
+      We cannot produce a kNN prediction until
+      the current feature exists.
+    */
+    if (
+      !Number.isFinite(features.f1) ||
+      !Number.isFinite(features.f2) ||
+      directions.length === 0
+    ) {
+      continue;
+    }
+
+    /*
+      EXACT kNN selection.
+    */
+    let maxdist = -999;
+
+    for (
+      let i = 0;
+      i < directions.length;
+      i++
+    ) {
+      const d =
+        Math.sqrt(
+          Math.pow(
+            features.f1 -
+              feature1History[i],
+            2
+          ) +
+          Math.pow(
+            features.f2 -
+              feature2History[i],
+            2
+          )
+        );
+
+      if (
+        d > maxdist
+      ) {
+        maxdist = d;
+
+        if (
+          predictions.length >=
+          KNN_K
+        ) {
+          predictions.shift();
+        }
+
+        predictions.push(
+          directions[i]
+        );
+      }
+    }
+
+    const prediction =
+      predictions.reduce(
+        (sum, value) =>
+          sum + value,
+        0
+      );
+
+    /*
+      Pine filter = Both
+
+      volatilityBreak(1,10)
+      AND
+      volumeBreak(49)
+    */
+    const history =
+      closed.slice(
+        0,
+        index + 1
+      );
+
+    const volatility =
+      calculateVolatilityBreak(
+        history
+      );
+
+    const volume =
+      calculateVolumeBreak(
+        history
+      );
+
+    /*
+      If volume is unavailable, the Pine
+      "Both" filter cannot be truthfully
+      reproduced.
+    */
+    const filter =
+      volatility === true &&
+      volume === true;
+
+    /*
+      On a closed candle the bar has already
+      lived through the threshold.
+
+      Pine:
+        barlife > 99.9
+    */
+    const barlifePassed =
+      index > 0;
+
+    let signal =
+      previousSignal;
+
+    if (
+      prediction > 0 &&
+      barlifePassed &&
+      filter
+    ) {
+      signal = 1;
+    } else if (
+      prediction < 0 &&
+      barlifePassed &&
+      filter
+    ) {
+      signal = -1;
+    }
+
+    /*
+      Pine:
+        changed = change(signal)
+    */
+    const changed =
+      signal !== previousSignal;
+
+    /*
+      Pine:
+        hp_counter := changed
+          ? 0
+          : hp_counter + 1
+    */
+    if (changed) {
+      hpCounter = 0;
+    } else {
+      hpCounter++;
+    }
+
+    /*
+      Pine alert:
+
+      if changed and signal==BUY
+          alert("Buy Alert")
+
+      if changed and signal==SELL
+          alert("Sell Alert")
+    */
+    if (
+      changed &&
+      signal === 1
+    ) {
+      latestAlert = {
+        signal: "BUY",
+        candleTime:
+          candle.time,
+        prediction
+      };
+    }
+
+    if (
+      changed &&
+      signal === -1
+    ) {
+      latestAlert = {
+        signal: "SELL",
+        candleTime:
+          candle.time,
+        prediction
+      };
+    }
+
+    previousSignal =
+      signal;
+  }
+
+  /*
+    Reset temporary histories after scan.
+  */
+  feature1History = [];
+  feature2History = [];
+
+  if (!latestAlert) {
     return {
       signal: "WAITING",
-
-      reason:
-        "RR below minimum",
-
       candleTime:
-        current.time,
-
-      setupAnchor: null,
-
-      checks
+        closed[
+          closed.length - 1
+        ].time
     };
   }
 
-  checks.rr =
-    "CONFIRMED";
-
   return {
-    signal,
-
-    entry:
-      roundPrice(entry),
-
-    stopLoss:
-      roundPrice(stopLoss),
-
-    takeProfit:
-      roundPrice(takeProfit),
-
-    rr:
-      Number(rr.toFixed(2)),
+    signal:
+      latestAlert.signal,
 
     candleTime:
-      current.time,
+      latestAlert.candleTime,
+
+    prediction:
+      latestAlert.prediction,
 
     setupAnchor:
-      setup?.time ||
-      current.time,
-
-    checks,
-
-    details: {
-      sweep:
-        signal === "BUY"
-          ? buySweep
-          : sellSweep,
-
-      structure:
-        signal === "BUY"
-          ? buyStructure
-          : sellStructure,
-
-      ema:
-        signal === "BUY"
-          ? trend.buy
-          : trend.sell,
-
-      vwap:
-        signal === "BUY"
-          ? vwapBuy
-          : vwapSell,
-
-      momentum:
-        signal === "BUY"
-          ? momentumBuy
-          : momentumSell,
-
-      atr:
-        atrConfirmed
-    }
+      latestAlert.candleTime
   };
 }
+
+/* =====================================================
+   TWELVE DATA
+===================================================== */
 
 async function getCandles(env) {
   if (!env.TWELVE_DATA_API_KEY) {
@@ -707,8 +1169,8 @@ async function getCandles(env) {
   const url =
     "https://api.twelvedata.com/time_series" +
     "?symbol=XAU/USD" +
-    "&interval=5min" +
-    "&outputsize=100" +
+    `&interval=${TIMEFRAME}` +
+    `&outputsize=${OUTPUT_SIZE}` +
     "&apikey=" +
     encodeURIComponent(
       env.TWELVE_DATA_API_KEY
@@ -730,7 +1192,11 @@ async function getCandles(env) {
     );
   }
 
-  if (!Array.isArray(data.values)) {
+  if (
+    !Array.isArray(
+      data.values
+    )
+  ) {
     throw new Error(
       "Twelve Data returned no candle data."
     );
@@ -738,11 +1204,29 @@ async function getCandles(env) {
 
   return data.values
     .map(candle => ({
-      time: candle.datetime,
-      open: Number(candle.open),
-      high: Number(candle.high),
-      low: Number(candle.low),
-      close: Number(candle.close)
+      time:
+        candle.datetime,
+
+      open:
+        Number(candle.open),
+
+      high:
+        Number(candle.high),
+
+      low:
+        Number(candle.low),
+
+      close:
+        Number(candle.close),
+
+      /*
+        Volume is REQUIRED for the exact
+        Pine "Both" filter.
+      */
+      volume:
+        candle.volume === undefined
+          ? NaN
+          : Number(candle.volume)
     }))
     .filter(c =>
       Number.isFinite(c.open) &&
@@ -753,48 +1237,9 @@ async function getCandles(env) {
     .reverse();
 }
 
-async function getLivePrice(env) {
-  if (!env.TWELVE_DATA_API_KEY) {
-    throw new Error(
-      "TWELVE_DATA_API_KEY is missing"
-    );
-  }
-
-  const url =
-    "https://api.twelvedata.com/price" +
-    "?symbol=XAU/USD" +
-    "&apikey=" +
-    encodeURIComponent(
-      env.TWELVE_DATA_API_KEY
-    );
-
-  const response =
-    await fetch(url);
-
-  const data =
-    await response.json();
-
-  if (
-    !response.ok ||
-    data.status === "error"
-  ) {
-    throw new Error(
-      data.message ||
-      "Twelve Data price request failed."
-    );
-  }
-
-  const price =
-    Number(data.price);
-
-  if (!Number.isFinite(price)) {
-    throw new Error(
-      "Invalid XAU/USD price from Twelve Data."
-    );
-  }
-
-  return roundPrice(price);
-}
+/* =====================================================
+   TELEGRAM
+===================================================== */
 
 async function telegramRequest(
   env,
@@ -858,7 +1303,8 @@ async function telegramRequest(
 
     return {
       ok: true,
-      result: data.result
+      result:
+        data.result
     };
 
   } catch (error) {
@@ -895,25 +1341,9 @@ async function sendTelegram(
   const message =
 `XAU AI CHART
 
-${signal.signal} XAUUSD M5
-
-Entry: ${signal.entry}
-SL: ${signal.stopLoss}
-TP: ${signal.takeProfit}
-RR: ${signal.rr}
-
-Sweep: ${signal.checks.sweep}
-Structure: ${signal.checks.structure}
-EMA: ${signal.checks.ema}
-VWAP: ${signal.checks.vwap}
-Momentum: ${signal.checks.momentum}
-ATR: ${signal.checks.atr}
-
-Candle: ${signal.candleTime}
-
-Fresh setup confirmed.
-Closed candle confirmed.
-Non-repainting system.`;
+${signal.signal === "BUY"
+  ? "🟢 BUY XAUUSD"
+  : "🔴 SELL XAUUSD"}`;
 
   const result =
     await telegramRequest(
@@ -925,7 +1355,8 @@ Non-repainting system.`;
             env.TELEGRAM_CHAT_ID
           ),
 
-        text: message
+        text:
+          message
       }
     );
 
@@ -937,7 +1368,8 @@ Non-repainting system.`;
         result.error,
 
       errorCode:
-        result.errorCode || null
+        result.errorCode ||
+        null
     };
   }
 
@@ -952,7 +1384,6 @@ async function testTelegram(env) {
   if (!env.TELEGRAM_BOT_TOKEN) {
     return {
       ok: false,
-      stage: "configuration",
       error:
         "TELEGRAM_BOT_TOKEN is missing."
     };
@@ -961,7 +1392,6 @@ async function testTelegram(env) {
   if (!env.TELEGRAM_CHAT_ID) {
     return {
       ok: false,
-      stage: "configuration",
       error:
         "TELEGRAM_CHAT_ID is missing."
     };
@@ -976,23 +1406,10 @@ async function testTelegram(env) {
   if (!bot.ok) {
     return {
       ok: false,
-      stage: "getMe",
-      error: bot.error,
-      errorCode:
-        bot.errorCode || null
+      error:
+        bot.error
     };
   }
-
-  const botInfo = {
-    id:
-      bot.result?.id || null,
-
-    username:
-      bot.result?.username || null,
-
-    firstName:
-      bot.result?.first_name || null
-  };
 
   const sent =
     await telegramRequest(
@@ -1007,56 +1424,43 @@ async function testTelegram(env) {
         text:
 `XAU AI CHART
 
-Telegram connection test successful.
-
-Bot: @${botInfo.username || "unknown"}
-
-Your Telegram alerts are connected and ready.`
+Telegram connection test successful.`
       }
     );
 
   if (!sent.ok) {
     return {
       ok: false,
-
-      stage:
-        "sendMessage",
-
-      bot: botInfo,
-
       error:
-        sent.error,
-
-      errorCode:
-        sent.errorCode || null
+        sent.error
     };
   }
 
   return {
     ok: true,
+    bot: {
+      id:
+        bot.result?.id ||
+        null,
 
-    stage:
-      "complete",
+      username:
+        bot.result?.username ||
+        null,
 
-    bot:
-      botInfo,
+      firstName:
+        bot.result?.first_name ||
+        null
+    },
 
     messageSent:
       true
   };
 }
 
-/*
-  =====================================================
-  DURABLE OBJECT SIGNAL LOCK
-  =====================================================
+/* =====================================================
+   DURABLE OBJECT
+===================================================== */
 
-  This replaces the old KV-based active setup lock.
-
-  Durable Objects serialize requests to the same object,
-  so two scans cannot both successfully claim the same
-  setup at the same time.
-*/
 export class XAUSetupLock extends DurableObject {
 
   constructor(ctx, env) {
@@ -1066,7 +1470,9 @@ export class XAUSetupLock extends DurableObject {
 
   async readState() {
     return (
-      await this.ctx.storage.get("state")
+      await this.ctx.storage.get(
+        "state"
+      )
     ) || {
       direction: null,
       anchor: null,
@@ -1093,10 +1499,10 @@ export class XAUSetupLock extends DurableObject {
     const state =
       await this.readState();
 
-    /*
-      READ STATE
-    */
-    if (url.pathname === "/state") {
+    if (
+      url.pathname ===
+      "/state"
+    ) {
       return json({
         ok: true,
         state
@@ -1104,12 +1510,13 @@ export class XAUSetupLock extends DurableObject {
     }
 
     /*
-      NEUTRAL CANDLE
-
-      Two distinct neutral candles reset
-      the previous active setup.
+      WAITING candles re-arm after
+      two distinct neutral candles.
     */
-    if (url.pathname === "/neutral") {
+    if (
+      url.pathname ===
+      "/neutral"
+    ) {
       const body =
         await request.json();
 
@@ -1135,7 +1542,8 @@ export class XAUSetupLock extends DurableObject {
 
       const neutralCandles =
         Number(
-          state.neutralCandles || 0
+          state.neutralCandles ||
+          0
         ) + 1;
 
       if (
@@ -1151,7 +1559,9 @@ export class XAUSetupLock extends DurableObject {
           pending: null
         };
 
-        await this.writeState(reset);
+        await this.writeState(
+          reset
+        );
 
         return json({
           ok: true,
@@ -1166,7 +1576,9 @@ export class XAUSetupLock extends DurableObject {
       state.lastNeutralCandle =
         candleTime;
 
-      await this.writeState(state);
+      await this.writeState(
+        state
+      );
 
       return json({
         ok: true,
@@ -1175,20 +1587,12 @@ export class XAUSetupLock extends DurableObject {
     }
 
     /*
-      CLAIM A SIGNAL
-
-      This is the important part.
-
-      The DO decides whether this signal is:
-
-      - NEW
-      - SAME ACTIVE
-      - REVERSAL
-      - DUPLICATE
-
-      before Telegram is contacted.
+      CLAIM
     */
-    if (url.pathname === "/claim") {
+    if (
+      url.pathname ===
+      "/claim"
+    ) {
       const body =
         await request.json();
 
@@ -1208,14 +1612,11 @@ export class XAUSetupLock extends DurableObject {
         return json({
           ok: true,
           allowed: false,
-          reason: "INVALID_DIRECTION"
+          reason:
+            "INVALID_DIRECTION"
         });
       }
 
-      /*
-        Another request is already sending
-        this exact setup.
-      */
       if (
         state.pending &&
         state.pending.signalId ===
@@ -1229,19 +1630,9 @@ export class XAUSetupLock extends DurableObject {
         });
       }
 
-      /*
-        Same direction already active.
-
-        This prevents:
-
-        SELL
-        SELL
-        SELL
-
-        from being sent repeatedly.
-      */
       if (
-        state.direction === signal
+        state.direction ===
+        signal
       ) {
         return json({
           ok: true,
@@ -1254,13 +1645,11 @@ export class XAUSetupLock extends DurableObject {
         });
       }
 
-      /*
-        Exact signal was already sent.
-      */
       if (
         state.lastSignalCandle ===
           candleTime &&
-        state.direction === signal
+        state.direction ===
+          signal
       ) {
         return json({
           ok: true,
@@ -1270,11 +1659,6 @@ export class XAUSetupLock extends DurableObject {
         });
       }
 
-      /*
-        New setup or genuine reversal.
-
-        Lock it BEFORE Telegram is called.
-      */
       state.pending = {
         signal,
         signalId,
@@ -1283,11 +1667,12 @@ export class XAUSetupLock extends DurableObject {
           Date.now()
       };
 
-      await this.writeState(state);
+      await this.writeState(
+        state
+      );
 
       return json({
         ok: true,
-
         allowed: true,
 
         action:
@@ -1299,10 +1684,11 @@ export class XAUSetupLock extends DurableObject {
 
     /*
       COMMIT
-
-      Only called after Telegram succeeds.
     */
-    if (url.pathname === "/commit") {
+    if (
+      url.pathname ===
+      "/commit"
+    ) {
       const body =
         await request.json();
 
@@ -1344,7 +1730,9 @@ export class XAUSetupLock extends DurableObject {
       state.pending =
         null;
 
-      await this.writeState(state);
+      await this.writeState(
+        state
+      );
 
       return json({
         ok: true,
@@ -1354,11 +1742,11 @@ export class XAUSetupLock extends DurableObject {
 
     /*
       RELEASE
-
-      Telegram failed.
-      Allow the next Cron to retry.
     */
-    if (url.pathname === "/release") {
+    if (
+      url.pathname ===
+      "/release"
+    ) {
       const body =
         await request.json();
 
@@ -1370,7 +1758,9 @@ export class XAUSetupLock extends DurableObject {
         state.pending =
           null;
 
-        await this.writeState(state);
+        await this.writeState(
+          state
+        );
       }
 
       return json({
@@ -1390,11 +1780,21 @@ export class XAUSetupLock extends DurableObject {
   }
 }
 
-function getSignalId(signal) {
+/* =====================================================
+   SIGNAL ID
+===================================================== */
+
+function getSignalId(
+  signal
+) {
   return (
-    `${signal.signal}|${signal.setupAnchor}|${signal.candleTime}`
+    `${signal.signal}|${signal.candleTime}`
   );
 }
+
+/* =====================================================
+   DURABLE OBJECT CALL
+===================================================== */
 
 async function callSetupLock(
   env,
@@ -1409,11 +1809,13 @@ async function callSetupLock(
 
   const id =
     env.XAU_SETUP_LOCK.idFromName(
-      "XAUUSD-M5-SIGNAL-LOCK"
+      "XAUUSD-M45-SIGNAL-LOCK"
     );
 
   const stub =
-    env.XAU_SETUP_LOCK.get(id);
+    env.XAU_SETUP_LOCK.get(
+      id
+    );
 
   const response =
     await stub.fetch(
@@ -1435,13 +1837,14 @@ async function callSetupLock(
   return response.json();
 }
 
+/* =====================================================
+   PROCESS SIGNAL
+===================================================== */
+
 async function processSignal(
   env,
   signal
 ) {
-  /*
-    WAITING = no trade.
-  */
   if (
     signal.signal !== "BUY" &&
     signal.signal !== "SELL"
@@ -1451,29 +1854,23 @@ async function processSignal(
       "/neutral",
       {
         candleTime:
-          signal.candleTime
+          signal.candleTime ||
+          null
       }
     );
 
     return {
       ok: true,
-
       ...signal,
 
       telegramSent:
-        false,
-
-      notificationMode:
-        "Cron-only"
+        false
     };
   }
 
   const signalId =
     getSignalId(signal);
 
-  /*
-    DURABLE atomic-style serialized claim.
-  */
   const claim =
     await callSetupLock(
       env,
@@ -1492,7 +1889,6 @@ async function processSignal(
   if (!claim.allowed) {
     return {
       ok: true,
-
       ...signal,
 
       telegramSent:
@@ -1502,18 +1898,10 @@ async function processSignal(
         true,
 
       reason:
-        claim.reason,
-
-      activeDirection:
-        claim.activeDirection ||
-        null
+        claim.reason
     };
   }
 
-  /*
-    Telegram is only sent AFTER the setup
-    has been successfully claimed.
-  */
   const telegram =
     await sendTelegram(
       env,
@@ -1531,24 +1919,17 @@ async function processSignal(
 
     return {
       ok: true,
-
       ...signal,
 
       telegramSent:
         false,
 
       telegramError:
-        telegram.error || null,
-
-      telegramErrorCode:
-        telegram.errorCode || null
+        telegram.error ||
+        null
     };
   }
 
-  /*
-    Telegram succeeded.
-    Now make the direction officially active.
-  */
   await callSetupLock(
     env,
     "/commit",
@@ -1559,7 +1940,8 @@ async function processSignal(
       signalId,
 
       anchor:
-        signal.setupAnchor,
+        signal.setupAnchor ||
+        signal.candleTime,
 
       candleTime:
         signal.candleTime
@@ -1568,21 +1950,20 @@ async function processSignal(
 
   return {
     ok: true,
-
     ...signal,
 
     telegramSent:
-      true,
-
-    telegramError:
-      null,
-
-    setupState:
-      "ACTIVE"
+      true
   };
 }
 
-async function scanAndNotify(env) {
+/* =====================================================
+   SCAN
+===================================================== */
+
+async function scanAndNotify(
+  env
+) {
   const candles =
     await getCandles(env);
 
@@ -1595,19 +1976,38 @@ async function scanAndNotify(env) {
   );
 }
 
+/* =====================================================
+   WORKER
+===================================================== */
+
 export default {
-  async fetch(request, env) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: corsHeaders
-      });
+
+  async fetch(
+    request,
+    env
+  ) {
+    if (
+      request.method ===
+      "OPTIONS"
+    ) {
+      return new Response(
+        null,
+        {
+          headers:
+            corsHeaders
+        }
+      );
     }
 
     const url =
       new URL(request.url);
 
     try {
-      if (url.pathname === "/") {
+
+      if (
+        url.pathname ===
+        "/"
+      ) {
         return json({
           ok: true,
 
@@ -1636,7 +2036,33 @@ export default {
             "XAUUSD",
 
           timeframe:
-            "M5",
+            "45min",
+
+          signalEngine:
+            "Original Pine kNN Alert Logic",
+
+          K,
+
+          k:
+            KNN_K,
+
+          indicator:
+            "All",
+
+          fast:
+            FAST,
+
+          slow:
+            SLOW,
+
+          filter:
+            "Both",
+
+          holdingPeriod:
+            HOLDING_PERIOD,
+
+          timeThreshold:
+            TIME_THRESHOLD,
 
           twelveData:
             !!env.TWELVE_DATA_API_KEY,
@@ -1645,43 +2071,11 @@ export default {
             !!env.TELEGRAM_BOT_TOKEN &&
             !!env.TELEGRAM_CHAT_ID,
 
-          telegramTest:
-            true,
-
-          signalEngine:
-            "Fresh Sweep OR Structure + EMA + 2/3 confirmation + Durable Setup Lifecycle",
-
-          priceSource:
-            "Twelve Data",
-
-          maxSignalsPerDay:
-            "UNLIMITED",
-
           notificationMode:
             "Cron-only automatic Telegram",
 
           duplicateProtection:
-            "Durable Object serialized setup lock"
-        });
-      }
-
-      if (
-        url.pathname ===
-        "/api/gold"
-      ) {
-        const price =
-          await getLivePrice(env);
-
-        return json({
-          ok: true,
-
-          symbol:
-            "XAUUSD",
-
-          price,
-
-          source:
-            "Twelve Data"
+            "Durable Object"
         });
       }
 
@@ -1699,16 +2093,14 @@ export default {
             "XAUUSD",
 
           timeframe:
-            "M5",
+            "45min",
 
           candles
         });
       }
 
       /*
-        READ-ONLY SCAN.
-
-        It NEVER sends Telegram.
+        READ-ONLY SIGNAL CHECK.
       */
       if (
         url.pathname ===
@@ -1728,14 +2120,10 @@ export default {
         if (!notify) {
           return json({
             ok: true,
-
             ...signal,
 
             telegramSent:
-              false,
-
-            notificationMode:
-              "Cron-only"
+              false
           });
         }
 
@@ -1748,8 +2136,7 @@ export default {
       }
 
       /*
-        SHOW CURRENT LOCK STATE.
-        Read-only — does not send Telegram.
+        Durable Object state.
       */
       if (
         url.pathname ===
@@ -1762,15 +2149,22 @@ export default {
             {}
           );
 
-        return json(result);
+        return json(
+          result
+        );
       }
 
+      /*
+        Telegram test.
+      */
       if (
         url.pathname ===
         "/api/telegram-test"
       ) {
         const result =
-          await testTelegram(env);
+          await testTelegram(
+            env
+          );
 
         return json(
           result,
@@ -1791,6 +2185,7 @@ export default {
       );
 
     } catch (error) {
+
       return json(
         {
           ok: false,
