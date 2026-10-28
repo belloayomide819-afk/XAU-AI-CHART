@@ -85,12 +85,13 @@ async function fetchTwelveDataCandles(env, interval, outputsize) {
 }
 
 async function getGoldCandles(env) {
-  const [m1, m15, h1] = await Promise.all([
+  const [m1, m5, m15, h1] = await Promise.all([
     fetchTwelveDataCandles(env, "1min", 500),
+    fetchTwelveDataCandles(env, "5min", 500),
     fetchTwelveDataCandles(env, "15min", 150),
     fetchTwelveDataCandles(env, "1h", 100)
   ]);
-  return { m1: m1.candles, m15: m15.candles, h1: h1.candles };
+  return { m1: m1.candles, m5: m5.candles, m15: m15.candles, h1: h1.candles };
 }
 
 function ema(values, period) {
@@ -99,6 +100,20 @@ function ema(values, period) {
   let value = values[0];
   for (let i = 1; i < values.length; i++) value = values[i] * multiplier + value * (1 - multiplier);
   return value;
+}
+
+function atr(candles, period) {
+  if (candles.length < period) return 1.0;
+  let sum = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const tr = Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - candles[i-1].close),
+      Math.abs(candles[i].low - candles[i-1].close)
+    );
+    sum += tr;
+  }
+  return sum / period;
 }
 
 function digitalRootOffset(price) {
@@ -123,7 +138,9 @@ function round2(value) {
   return Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
 }
 
-// ENGINE 1: T4F
+// ==========================================
+// ENGINE 1: T4F TRAP & LIMIT
+// ==========================================
 function buildT4FSignal(data, session) {
   const { m1, m15, h1 } = data;
   const closedM15 = m15[m15.length - 1];
@@ -159,16 +176,13 @@ function buildT4FSignal(data, session) {
   else if (!nearLevel) reason = "Price >$5 away from level.";
   else if (!m1Confirmed) reason = "Awaiting 1M confirmation.";
   else if (signalAllowed) {
-    signal = bias;
-    entry = level;
+    signal = bias; entry = level;
     if (bias === "SELL") {
-      stopLoss = recentHigh.value + 1.50;
-      const risk = stopLoss - entry;
+      stopLoss = recentHigh.value + 1.50; const risk = stopLoss - entry;
       tp1 = entry - risk; tp2 = entry - (risk * 2); tp3 = entry - (risk * 3);
       setupKey = `T4F|SELL|${recentHigh.time}|${entry.toFixed(2)}`;
     } else {
-      stopLoss = recentLow.value - 1.50;
-      const risk = entry - stopLoss;
+      stopLoss = recentLow.value - 1.50; const risk = entry - stopLoss;
       tp1 = entry + risk; tp2 = entry + (risk * 2); tp3 = entry + (risk * 3);
       setupKey = `T4F|BUY|${recentLow.time}|${entry.toFixed(2)}`;
     }
@@ -177,7 +191,9 @@ function buildT4FSignal(data, session) {
   return { engine: "1 (T4F SNIPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
 }
 
-// ENGINE 2: ASIA SWEEP
+// ==========================================
+// ENGINE 2: ASIA SESSION SWEEP
+// ==========================================
 function buildAsiaSweepSignal(data) {
   const { m15 } = data;
   let asiaHigh = -Infinity, asiaLow = Infinity, asiaFound = false;
@@ -198,7 +214,7 @@ function buildAsiaSweepSignal(data) {
   const ema200 = ema(closes, 200);
   const isBullishTrend = currentCandle.close > ema200;
 
-  let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "Waiting for Asia Sweep + CHoCH.";
+  let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "Waiting for Asia Sweep.";
 
   if (currentCandle.high > asiaHigh && currentCandle.close < asiaHigh && !isBullishTrend) {
     if (currentCandle.close < prevCandle.low) {
@@ -217,7 +233,66 @@ function buildAsiaSweepSignal(data) {
   return { engine: "2 (ASIA SWEEP)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
 }
 
-// TELEGRAM FUNCTIONS
+// ==========================================
+// ENGINE 3: HIGH-FREQUENCY SCALPER (M5) WITH EDGE
+// ==========================================
+function buildScalperSignal(data) {
+  const { m5 } = data;
+  const closes = m5.map(c => c.close);
+  
+  // Calculate Indicators
+  const ema50 = ema(closes, 50);
+  const currentAtr = atr(m5, 14);
+  const currentCandle = m5[m5.length - 1];
+  
+  // RSI Calculation
+  let gains = 0, losses = 0;
+  for (let i = closes.length - 14; i < closes.length; i++) {
+    const diff = closes[i] - closes[i-1];
+    if (diff > 0) gains += diff; else losses -= diff;
+  }
+  const rs = gains / (losses || 1);
+  const rsi = 100 - (100 / (1 + rs));
+  
+  const prevCandle = m5[m5.length - 2];
+  const prevDiff = closes[closes.length - 2] - closes[closes.length - 3];
+  const prevRsi = 100 - (100 / (1 + ((gains - (prevDiff > 0 ? prevDiff : 0)) / ((losses + (prevDiff < 0 ? prevDiff : 0)) || 1))));
+
+  let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "No Scalper setup.";
+
+  // Tight SL/TP for scalper
+  const slDistance = currentAtr * 1.5; // Dynamic SL based on volatility
+  const bodySize = Math.abs(currentCandle.close - currentCandle.open);
+  const distanceToEma = Math.abs(currentCandle.close - ema50);
+
+  // BUY EDGE: RSI crosses 50, Price > EMA 50, Momentum Candle (Body > 50% ATR), and NOT overextended (Distance < 2x ATR)
+  if (prevRsi <= 50 && rsi > 50 && currentCandle.close > ema50) {
+    if (bodySize > (currentAtr * 0.5) && distanceToEma < (currentAtr * 2.0)) {
+      signal = "BUY"; entry = currentCandle.close; stopLoss = entry - slDistance;
+      tp1 = entry + (slDistance * 0.5); // Very tight TP1
+      tp2 = entry + (slDistance * 1.0);
+      tp3 = entry + (slDistance * 2.0);
+      setupKey = `SCALP|BUY|${currentCandle.time}`; 
+      reason = "M5 RSI Cross Up + Momentum + Tight Location.";
+    }
+  }
+  
+  // SELL EDGE: RSI crosses 50, Price < EMA 50, Momentum Candle, and NOT overextended
+  if (prevRsi >= 50 && rsi < 50 && currentCandle.close < ema50) {
+    if (bodySize > (currentAtr * 0.5) && distanceToEma < (currentAtr * 2.0)) {
+      signal = "SELL"; entry = currentCandle.close; stopLoss = entry + slDistance;
+      tp1 = entry - (slDistance * 0.5);
+      tp2 = entry - (slDistance * 1.0);
+      tp3 = entry - (slDistance * 2.0);
+      setupKey = `SCALP|SELL|${currentCandle.time}`; 
+      reason = "M5 RSI Cross Down + Momentum + Tight Location.";
+    }
+  }
+  
+  return { engine: "3 (M5 SCALPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
+}
+
+// TELEGRAM & TRADE TRACKER
 async function sendTelegram(env, text) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const chatId = env.TELEGRAM_CHAT_ID;
@@ -277,7 +352,6 @@ async function scanApi(env) {
   
   await checkActiveTrades(env, currentPrice);
 
-  // --- STATUS CHECK (Open / Expired) ---
   const id = env.XAU_SETUP_LOCK.idFromName("xau-global-lock");
   const stub = env.XAU_SETUP_LOCK.get(id);
   
@@ -287,16 +361,16 @@ async function scanApi(env) {
   const statusData = await statusRes.json();
   
   if (statusData.action === "OPENED") {
-    await sendTelegram(env, `🟢 <b>T4F WINDOW OPEN</b>\nBot is actively scanning XAUUSD for the 369 setup.`);
+    await sendTelegram(env, `🟢 <b>T4F WINDOW OPEN</b>\nBot is actively scanning XAUUSD.`);
   } else if (statusData.action === "EXPIRED") {
     await sendTelegram(env, `🔴 <b>T4F WINDOW CLOSED</b>\nNo valid setup found. Wait until ${session.nextTime}.`);
   }
 
-  // --- RUN ENGINES ---
   const t4fResult = buildT4FSignal(data, session);
   const asiaResult = buildAsiaSweepSignal(data);
+  const scalperResult = buildScalperSignal(data); // ENGINE 3
   
-  const results = [t4fResult, asiaResult];
+  const results = [t4fResult, asiaResult, scalperResult];
   const alertsSent = [];
 
   for (const res of results) {
@@ -320,7 +394,7 @@ async function scanApi(env) {
     }
   }
 
-  return { ok: true, price: round2(currentPrice), session, engines: { t4f: t4fResult, asia: asiaResult }, telegram: alertsSent };
+  return { ok: true, price: round2(currentPrice), session, engines: { t4f: t4fResult, asia: asiaResult, scalper: scalperResult }, telegram: alertsSent };
 }
 
 export class XAUSetupLock {
