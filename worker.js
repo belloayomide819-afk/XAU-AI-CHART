@@ -350,7 +350,6 @@ const HTML_CONTENT = `
         .rule-box { background-color: #0B0E14; border: 1px solid #2A2E39; border-radius: 6px; padding: 10px 14px; margin-bottom: 6px; font-size: 12px; display: flex; align-items: center; font-family: 'JetBrains Mono', monospace; }
         .rule-green { border-color: #089981; color: #089981; }
         .rule-yellow { border-color: #F59E0B; color: #F59E0B; }
-        .rule-red { border-color: #F23645; color: #F23645; }
         .badge-waiting { background: #1E222D; color: #B2B5BE; padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; border: 1px solid #2A2E39;}
         .badge-active { background: rgba(8, 153, 129, 0.2); color: #089981; padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; border: 1px solid #089981;}
         #tvchart { width: 100%; height: 350px; border-radius: 8px; overflow: hidden; background: #131722;}
@@ -464,7 +463,6 @@ export default {
       }
     }
 
-    // Serve the Dashboard HTML directly
     return new Response(HTML_CONTENT, { headers: { "Content-Type": "text/html" } });
   }
 };
