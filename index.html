@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XAU AI CHART - Twin Engine</title>
+    <title>XAU AI CHART - Triple Engine</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
@@ -68,7 +68,7 @@
         <span class="text-2xl text-yellow-500">👑</span>
         <div>
             <h1 class="text-xl font-bold tracking-wide">XAU AI CHART</h1>
-            <p class="text-[10px] text-gray-500 tracking-widest">T4F TRAP & LIMIT · GOLD-ONLY SCANNER</p>
+            <p class="text-[10px] text-gray-500 tracking-widest">TRIPLE ENGINE TERMINAL</p>
         </div>
     </div>
 
@@ -90,7 +90,7 @@
         </div>
         <div class="card mb-0">
             <p class="section-label mb-1">STRATEGY TIMEFRAMES</p>
-            <h2 class="text-lg font-bold">M15 / H1 / M1</h2>
+            <h2 class="text-lg font-bold">M15 / H1 / M1 / M5</h2>
         </div>
         <div class="card mb-0">
             <p class="section-label mb-1">LATEST COMPLETED PRICE</p>
@@ -114,7 +114,6 @@
             <div id="e1-status-badge" class="badge-waiting">WAITING</div>
         </div>
 
-        <!-- E1 Signal Box -->
         <div id="e1-signal-box" class="hidden bg-[#0B0E14] border border-gray-800 p-4 rounded-lg mb-4">
             <div class="text-[10px] text-gray-500 mb-2">CURRENT SIGNAL</div>
             <div id="e1-type" class="text-2xl font-black text-yellow-500 mb-3">WAITING</div>
@@ -137,7 +136,6 @@
             </div>
         </div>
 
-        <!-- E1 Rules -->
         <p class="section-label mt-4">T4F RULE CHECKS</p>
         <div class="space-y-2">
             <div id="e1-rule-1" class="rule-box rule-yellow justify-between"><span>T4F window</span> <span>WAIT</span></div>
@@ -145,9 +143,6 @@
             <div id="e1-rule-3" class="rule-box rule-yellow justify-between"><span>M15 candle bias</span> <span>WAIT</span></div>
             <div id="e1-rule-4" class="rule-box rule-yellow justify-between"><span>Entry level</span> <span>WAIT</span></div>
             <div id="e1-rule-5" class="rule-box rule-yellow justify-between"><span>M1 confirmation</span> <span>WAIT</span></div>
-            <div class="rule-box rule-green justify-between"><span>Completed candles</span> <span>CONFIRMED</span></div>
-            <div class="rule-box rule-green justify-between"><span>Duplicate alert guard</span> <span>ON · NO_NEW_SIGNAL</span></div>
-            <div class="rule-box rule-green justify-between"><span>Spot data feed</span> <span>CONNECTED</span></div>
         </div>
     </div>
 
@@ -163,7 +158,6 @@
             <div id="e2-status-badge" class="badge-waiting">WAITING</div>
         </div>
 
-        <!-- E2 Signal Box -->
         <div id="e2-signal-box" class="hidden bg-[#0B0E14] border border-gray-800 p-4 rounded-lg mb-4">
             <div class="text-[10px] text-gray-500 mb-2">CURRENT SIGNAL</div>
             <div id="e2-type" class="text-2xl font-black text-yellow-500 mb-3">WAITING</div>
@@ -186,14 +180,53 @@
             </div>
         </div>
 
-        <!-- E2 Rules -->
         <p class="section-label mt-4">ASIA SWEEP RULE CHECKS</p>
         <div class="space-y-2">
             <div id="e2-rule-1" class="rule-box rule-yellow justify-between"><span>Asia Range Swept</span> <span>WAIT</span></div>
             <div id="e2-rule-2" class="rule-box rule-yellow justify-between"><span>Trend Aligned (EMA 200)</span> <span>WAIT</span></div>
             <div id="e2-rule-3" class="rule-box rule-yellow justify-between"><span>CHoCH Confirmed</span> <span>WAIT</span></div>
-            <div class="rule-box rule-green justify-between"><span>Duplicate alert guard</span> <span>ON · NO_NEW_SIGNAL</span></div>
-            <div class="rule-box rule-green justify-between"><span>Spot data feed</span> <span>CONNECTED</span></div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- ENGINE 3: M5 SCALPER -->
+    <!-- ========================================== -->
+    <div class="card border-t-2 border-t-purple-500">
+        <div class="flex justify-between items-center mb-4">
+            <div>
+                <h3 class="text-lg font-bold text-white">ENGINE 3: M5 SCALPER</h3>
+                <p class="text-[10px] text-gray-500">High Frequency + Momentum</p>
+            </div>
+            <div id="e3-status-badge" class="badge-waiting">WAITING</div>
+        </div>
+
+        <div id="e3-signal-box" class="hidden bg-[#0B0E14] border border-gray-800 p-4 rounded-lg mb-4">
+            <div class="text-[10px] text-gray-500 mb-2">CURRENT SIGNAL</div>
+            <div id="e3-type" class="text-2xl font-black text-yellow-500 mb-3">WAITING</div>
+            <div class="grid grid-cols-3 gap-2 text-center">
+                <div class="bg-[#131722] p-2 rounded border border-gray-800">
+                    <p class="text-[9px] text-gray-500">ENTRY LIMIT</p>
+                    <p id="e3-entry" class="mono text-sm font-bold mt-1 text-white">—</p>
+                </div>
+                <div class="bg-[#131722] p-2 rounded border border-gray-800">
+                    <p class="text-[9px] text-red-500">STOP LOSS</p>
+                    <p id="e3-sl" class="mono text-sm font-bold text-red-500 mt-1">—</p>
+                </div>
+                <div class="bg-[#131722] p-2 rounded border border-gray-800">
+                    <p class="text-[9px] text-green-500">TAKE PROFIT</p>
+                    <p id="e3-tp" class="mono text-sm font-bold text-green-500 mt-1">—</p>
+                </div>
+            </div>
+            <div class="mt-3 text-[11px] text-gray-500 font-mono">
+                <span id="e3-reason">Waiting for M5 Momentum.</span>
+            </div>
+        </div>
+
+        <p class="section-label mt-4">M5 SCALPER RULE CHECKS</p>
+        <div class="space-y-2">
+            <div id="e3-rule-1" class="rule-box rule-yellow justify-between"><span>RSI Cross (50)</span> <span>WAIT</span></div>
+            <div id="e3-rule-2" class="rule-box rule-yellow justify-between"><span>Momentum Candle (ATR)</span> <span>WAIT</span></div>
+            <div id="e3-rule-3" class="rule-box rule-yellow justify-between"><span>Location (EMA 50)</span> <span>WAIT</span></div>
         </div>
     </div>
 
@@ -204,24 +237,11 @@
     <!-- TradingView Widget Script -->
     <script src="https://s3.tradingview.com/tv.js"></script>
     <script>
-        // Initialize TradingView Chart Properly
         new TradingView.widget({
-            "width": "100%",
-            "height": 350,
-            "symbol": "OANDA:XAUUSD",
-            "interval": "15",
-            "timezone": "Etc/UTC",
-            "theme": "dark",
-            "style": "1",
-            "locale": "en",
-            "toolbar_bg": "#f1f3f6",
-            "enable_publishing": false,
-            "hide_side_toolbar": true,
-            "allow_symbol_change": false,
-            "container_id": "tvchart",
-            "studies": [
-                "MAExp@tv-basicstudies" // Adds an EMA by default
-            ]
+            "width": "100%", "height": 350, "symbol": "OANDA:XAUUSD", "interval": "15",
+            "timezone": "Etc/UTC", "theme": "dark", "style": "1", "locale": "en",
+            "toolbar_bg": "#f1f3f6", "enable_publishing": false, "hide_side_toolbar": true,
+            "allow_symbol_change": false, "container_id": "tvchart", "studies": ["MAExp@tv-basicstudies"]
         });
 
         async function fetchSignals() {
@@ -230,7 +250,6 @@
                 const data = await res.json();
                 if (!data.ok) return;
 
-                // Update Top Status
                 document.getElementById('live-price').innerText = data.price.toFixed(2);
                 const mktStatus = document.getElementById('market-status');
                 const winStatus = document.getElementById('window-status');
@@ -248,29 +267,25 @@
                 }
 
                 // ==========================================
-                // UPDATE ENGINE 1 (T4F)
+                // UPDATE ENGINE 1
                 // ==========================================
                 const e1 = data.engines.t4f;
-                const e1Box = document.getElementById('e1-signal-box');
-                const e1Type = document.getElementById('e1-type');
-                
                 if (e1.signal !== 'WAITING') {
                     document.getElementById('e1-status-badge').className = 'badge-active';
                     document.getElementById('e1-status-badge').innerText = 'ACTIVE';
-                    e1Box.classList.remove('hidden');
-                    e1Type.innerText = e1.signal;
-                    e1Type.className = e1.signal === 'BUY' ? 'text-2xl font-black mb-3 text-green-500' : 'text-2xl font-black mb-3 text-red-500';
+                    document.getElementById('e1-signal-box').classList.remove('hidden');
+                    document.getElementById('e1-type').innerText = e1.signal;
+                    document.getElementById('e1-type').className = e1.signal === 'BUY' ? 'text-2xl font-black mb-3 text-green-500' : 'text-2xl font-black mb-3 text-red-500';
                     document.getElementById('e1-entry').innerText = e1.entry;
                     document.getElementById('e1-sl').innerText = e1.stopLoss;
                     document.getElementById('e1-tp').innerText = e1.tp3;
                 } else {
                     document.getElementById('e1-status-badge').className = 'badge-waiting';
                     document.getElementById('e1-status-badge').innerText = 'WAITING';
-                    e1Box.classList.add('hidden');
+                    document.getElementById('e1-signal-box').classList.add('hidden');
                 }
                 document.getElementById('e1-reason').innerText = e1.reason;
-
-                // Update E1 Rules
+                
                 if(e1.reason.includes('Outside')) {
                     document.getElementById('e1-rule-1').className = 'rule-box rule-yellow justify-between';
                     document.getElementById('e1-rule-1').innerHTML = '<span>T4F window</span> <span>CLOSED</span>';
@@ -279,54 +294,26 @@
                     document.getElementById('e1-rule-1').innerHTML = '<span>T4F window</span> <span>OPEN</span>';
                 }
 
-                if(e1.reason.includes('H1')) {
-                    document.getElementById('e1-rule-2').className = 'rule-box rule-yellow justify-between';
-                    document.getElementById('e1-rule-2').innerHTML = '<span>H1 EMA 50</span> <span>WAIT</span>';
-                } else {
-                    document.getElementById('e1-rule-2').className = 'rule-box rule-green justify-between';
-                    document.getElementById('e1-rule-2').innerHTML = '<span>H1 EMA 50</span> <span>ALIGNED</span>';
-                }
-
-                if(e1.reason.includes('Price >$5')) {
-                    document.getElementById('e1-rule-4').className = 'rule-box rule-yellow justify-between';
-                    document.getElementById('e1-rule-4').innerHTML = '<span>Entry level</span> <span>FAR</span>';
-                } else {
-                    document.getElementById('e1-rule-4').className = 'rule-box rule-green justify-between';
-                    document.getElementById('e1-rule-4').innerHTML = '<span>Entry level</span> <span>HIT</span>';
-                }
-
-                if(e1.reason.includes('1M')) {
-                    document.getElementById('e1-rule-5').className = 'rule-box rule-yellow justify-between';
-                    document.getElementById('e1-rule-5').innerHTML = '<span>M1 confirmation</span> <span>WAIT</span>';
-                } else {
-                    document.getElementById('e1-rule-5').className = 'rule-box rule-green justify-between';
-                    document.getElementById('e1-rule-5').innerHTML = '<span>M1 confirmation</span> <span>PASSED</span>';
-                }
-
                 // ==========================================
-                // UPDATE ENGINE 2 (ASIA SWEEP)
+                // UPDATE ENGINE 2
                 // ==========================================
                 const e2 = data.engines.asia;
-                const e2Box = document.getElementById('e2-signal-box');
-                const e2Type = document.getElementById('e2-type');
-                
                 if (e2.signal !== 'WAITING') {
                     document.getElementById('e2-status-badge').className = 'badge-active';
                     document.getElementById('e2-status-badge').innerText = 'ACTIVE';
-                    e2Box.classList.remove('hidden');
-                    e2Type.innerText = e2.signal;
-                    e2Type.className = e2.signal === 'BUY' ? 'text-2xl font-black mb-3 text-green-500' : 'text-2xl font-black mb-3 text-red-500';
+                    document.getElementById('e2-signal-box').classList.remove('hidden');
+                    document.getElementById('e2-type').innerText = e2.signal;
+                    document.getElementById('e2-type').className = e2.signal === 'BUY' ? 'text-2xl font-black mb-3 text-green-500' : 'text-2xl font-black mb-3 text-red-500';
                     document.getElementById('e2-entry').innerText = e2.entry;
                     document.getElementById('e2-sl').innerText = e2.stopLoss;
                     document.getElementById('e2-tp').innerText = e2.tp3;
                 } else {
                     document.getElementById('e2-status-badge').className = 'badge-waiting';
                     document.getElementById('e2-status-badge').innerText = 'WAITING';
-                    e2Box.classList.add('hidden');
+                    document.getElementById('e2-signal-box').classList.add('hidden');
                 }
                 document.getElementById('e2-reason').innerText = e2.reason;
 
-                // Update E2 Rules
                 if(e2.reason.includes('Sweep')) {
                     document.getElementById('e2-rule-1').className = 'rule-box rule-yellow justify-between';
                     document.getElementById('e2-rule-1').innerHTML = '<span>Asia Range Swept</span> <span>WAIT</span>';
@@ -335,12 +322,47 @@
                     document.getElementById('e2-rule-1').innerHTML = '<span>Asia Range Swept</span> <span>YES</span>';
                 }
 
-                if(e2.reason.includes('CHoCH')) {
-                    document.getElementById('e2-rule-3').className = 'rule-box rule-yellow justify-between';
-                    document.getElementById('e2-rule-3').innerHTML = '<span>CHoCH Confirmed</span> <span>WAIT</span>';
+                // ==========================================
+                // UPDATE ENGINE 3 (NEW)
+                // ==========================================
+                const e3 = data.engines.scalper;
+                if (e3.signal !== 'WAITING') {
+                    document.getElementById('e3-status-badge').className = 'badge-active';
+                    document.getElementById('e3-status-badge').innerText = 'ACTIVE';
+                    document.getElementById('e3-signal-box').classList.remove('hidden');
+                    document.getElementById('e3-type').innerText = e3.signal;
+                    document.getElementById('e3-type').className = e3.signal === 'BUY' ? 'text-2xl font-black mb-3 text-green-500' : 'text-2xl font-black mb-3 text-red-500';
+                    document.getElementById('e3-entry').innerText = e3.entry;
+                    document.getElementById('e3-sl').innerText = e3.stopLoss;
+                    document.getElementById('e3-tp').innerText = e3.tp3;
                 } else {
-                    document.getElementById('e2-rule-3').className = 'rule-box rule-green justify-between';
-                    document.getElementById('e2-rule-3').innerHTML = '<span>CHoCH Confirmed</span> <span>YES</span>';
+                    document.getElementById('e3-status-badge').className = 'badge-waiting';
+                    document.getElementById('e3-status-badge').innerText = 'WAITING';
+                    document.getElementById('e3-signal-box').classList.add('hidden');
+                }
+                document.getElementById('e3-reason').innerText = e3.reason;
+
+                // Update E3 Rules
+                if(e3.reason.includes('RSI')) {
+                    document.getElementById('e3-rule-1').className = 'rule-box rule-yellow justify-between';
+                    document.getElementById('e3-rule-1').innerHTML = '<span>RSI Cross (50)</span> <span>WAIT</span>';
+                } else {
+                    document.getElementById('e3-rule-1').className = 'rule-box rule-green justify-between';
+                    document.getElementById('e3-rule-1').innerHTML = '<span>RSI Cross (50)</span> <span>PASSED</span>';
+                }
+                if(e3.reason.includes('Momentum')) {
+                    document.getElementById('e3-rule-2').className = 'rule-box rule-yellow justify-between';
+                    document.getElementById('e3-rule-2').innerHTML = '<span>Momentum Candle (ATR)</span> <span>WAIT</span>';
+                } else {
+                    document.getElementById('e3-rule-2').className = 'rule-box rule-green justify-between';
+                    document.getElementById('e3-rule-2').innerHTML = '<span>Momentum Candle (ATR)</span> <span>PASSED</span>';
+                }
+                if(e3.reason.includes('Location')) {
+                    document.getElementById('e3-rule-3').className = 'rule-box rule-yellow justify-between';
+                    document.getElementById('e3-rule-3').innerHTML = '<span>Location (EMA 50)</span> <span>WAIT</span>';
+                } else {
+                    document.getElementById('e3-rule-3').className = 'rule-box rule-green justify-between';
+                    document.getElementById('e3-rule-3').innerHTML = '<span>Location (EMA 50)</span> <span>HIT</span>';
                 }
 
             } catch (err) {
@@ -348,7 +370,6 @@
             }
         }
 
-        // Fetch Signals and start interval
         fetchSignals();
         setInterval(fetchSignals, 10000);
     </script>
