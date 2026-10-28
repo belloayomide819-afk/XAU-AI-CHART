@@ -7,8 +7,8 @@ const JSON_HEADERS = {
 };
 
 const T4F_WINDOWS = [
-  { start: 8 * 60 + 3, end: 8 * 60 + 12, label: "London Window" },
-  { start: 14 * 60 + 45, end: 15 * 60 + 8, label: "New York Window" }
+  { start: 8 * 60 + 3, end: 8 * 60 + 12, label: "London Window", next: "14:45 WAT" },
+  { start: 14 * 60 + 45, end: 15 * 60 + 8, label: "New York Window", next: "08:03 WAT (Tomorrow)" }
 ];
 
 const INTERVAL_MS = { "1min": 60_000, "5min": 300_000, "15min": 900_000, "1h": 3_600_000 };
@@ -32,11 +32,17 @@ function lagosClock(date = new Date()) {
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
   const minutes = Number(values.hour) * 60 + Number(values.minute);
   const window = T4F_WINDOWS.find(item => minutes >= item.start && minutes <= item.end);
+  
+  let nextTime = "08:03 WAT (Tomorrow)";
+  if (minutes < T4F_WINDOWS[0].start) nextTime = "08:03 WAT";
+  else if (minutes > T4F_WINDOWS[0].end && minutes < T4F_WINDOWS[1].start) nextTime = "14:45 WAT";
+
   return {
     time: `${values.hour}:${values.minute}:${values.second}`,
     minutes,
     active: Boolean(window),
-    label: window?.label || "Scan Window Closed"
+    label: window?.label || "Scan Window Closed",
+    nextTime: window ? window.next : nextTime
   };
 }
 
@@ -117,9 +123,7 @@ function round2(value) {
   return Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
 }
 
-// ==========================================
-// ENGINE 1: T4F TRAP & LIMIT
-// ==========================================
+// ENGINE 1: T4F
 function buildT4FSignal(data, session) {
   const { m1, m15, h1 } = data;
   const closedM15 = m15[m15.length - 1];
@@ -150,45 +154,33 @@ function buildT4FSignal(data, session) {
 
   let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "No setup.";
 
-  if (!session.active) {
-    reason = "Outside T4F windows.";
-  } else if (!macroAligned) {
-    reason = "H1 EMA 50 trend filter does not agree.";
-  } else if (!nearLevel) {
-    reason = "Price >$5 away from level.";
-  } else if (!m1Confirmed) {
-    reason = "Awaiting 1M confirmation.";
-  } else if (signalAllowed) {
+  if (!session.active) reason = "Outside T4F windows.";
+  else if (!macroAligned) reason = "H1 EMA 50 trend filter does not agree.";
+  else if (!nearLevel) reason = "Price >$5 away from level.";
+  else if (!m1Confirmed) reason = "Awaiting 1M confirmation.";
+  else if (signalAllowed) {
     signal = bias;
     entry = level;
     if (bias === "SELL") {
       stopLoss = recentHigh.value + 1.50;
       const risk = stopLoss - entry;
-      tp1 = entry - risk;
-      tp2 = entry - (risk * 2);
-      tp3 = entry - (risk * 3);
+      tp1 = entry - risk; tp2 = entry - (risk * 2); tp3 = entry - (risk * 3);
       setupKey = `T4F|SELL|${recentHigh.time}|${entry.toFixed(2)}`;
     } else {
       stopLoss = recentLow.value - 1.50;
       const risk = entry - stopLoss;
-      tp1 = entry + risk;
-      tp2 = entry + (risk * 2);
-      tp3 = entry + (risk * 3);
+      tp1 = entry + risk; tp2 = entry + (risk * 2); tp3 = entry + (risk * 3);
       setupKey = `T4F|BUY|${recentLow.time}|${entry.toFixed(2)}`;
     }
     reason = "T4F conditions met.";
   }
-
   return { engine: "1 (T4F SNIPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
 }
 
-// ==========================================
-// ENGINE 2: ASIA SESSION SWEEP
-// ==========================================
+// ENGINE 2: ASIA SWEEP
 function buildAsiaSweepSignal(data) {
   const { m15 } = data;
   let asiaHigh = -Infinity, asiaLow = Infinity, asiaFound = false;
-  
   for (let i = m15.length - 1; i >= m15.length - 80; i--) {
     const candleTime = new Date(m15[i].time);
     const utcHour = candleTime.getUTCHours();
@@ -196,11 +188,8 @@ function buildAsiaSweepSignal(data) {
       asiaHigh = Math.max(asiaHigh, m15[i].high);
       asiaLow = Math.min(asiaLow, m15[i].low);
       asiaFound = true;
-    } else if (asiaFound) {
-      break;
-    }
+    } else if (asiaFound) break;
   }
-
   if (!asiaFound) return { engine: "2 (ASIA SWEEP)", signal: "WAITING", reason: "No Asia session found." };
 
   const currentCandle = m15[m15.length - 1];
@@ -209,42 +198,26 @@ function buildAsiaSweepSignal(data) {
   const ema200 = ema(closes, 200);
   const isBullishTrend = currentCandle.close > ema200;
 
-  let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "Waiting for Asia Sweep.";
+  let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "Waiting for Asia Sweep + CHoCH.";
 
   if (currentCandle.high > asiaHigh && currentCandle.close < asiaHigh && !isBullishTrend) {
     if (currentCandle.close < prevCandle.low) {
-      signal = "SELL";
-      entry = currentCandle.close;
-      stopLoss = currentCandle.high + 0.5;
-      const risk = stopLoss - entry;
-      tp1 = entry - risk;
-      tp2 = entry - (risk * 1.5);
-      tp3 = asiaLow;
-      setupKey = `ASIA|SELL|${currentCandle.time}`;
-      reason = "Asia High Swept + CHoCH.";
+      signal = "SELL"; entry = currentCandle.close; stopLoss = currentCandle.high + 0.5;
+      const risk = stopLoss - entry; tp1 = entry - risk; tp2 = entry - (risk * 1.5); tp3 = asiaLow;
+      setupKey = `ASIA|SELL|${currentCandle.time}`; reason = "Asia High Swept + CHoCH.";
     }
   }
-
   if (currentCandle.low < asiaLow && currentCandle.close > asiaLow && isBullishTrend) {
     if (currentCandle.close > prevCandle.high) {
-      signal = "BUY";
-      entry = currentCandle.close;
-      stopLoss = currentCandle.low - 0.5;
-      const risk = entry - stopLoss;
-      tp1 = entry + risk;
-      tp2 = entry + (risk * 1.5);
-      tp3 = asiaHigh;
-      setupKey = `ASIA|BUY|${currentCandle.time}`;
-      reason = "Asia Low Swept + CHoCH.";
+      signal = "BUY"; entry = currentCandle.close; stopLoss = currentCandle.low - 0.5;
+      const risk = entry - stopLoss; tp1 = entry + risk; tp2 = entry + (risk * 1.5); tp3 = asiaHigh;
+      setupKey = `ASIA|BUY|${currentCandle.time}`; reason = "Asia Low Swept + CHoCH.";
     }
   }
-
   return { engine: "2 (ASIA SWEEP)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
 }
 
-// ==========================================
-// TELEGRAM & TRADE TRACKER
-// ==========================================
+// TELEGRAM FUNCTIONS
 async function sendTelegram(env, text) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const chatId = env.TELEGRAM_CHAT_ID;
@@ -304,6 +277,22 @@ async function scanApi(env) {
   
   await checkActiveTrades(env, currentPrice);
 
+  // --- STATUS CHECK (Open / Expired) ---
+  const id = env.XAU_SETUP_LOCK.idFromName("xau-global-lock");
+  const stub = env.XAU_SETUP_LOCK.get(id);
+  
+  const statusRes = await stub.fetch("https://lock/check_session_status", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active: session.active, nextTime: session.nextTime })
+  });
+  const statusData = await statusRes.json();
+  
+  if (statusData.action === "OPENED") {
+    await sendTelegram(env, `🟢 <b>T4F WINDOW OPEN</b>\nBot is actively scanning XAUUSD for the 369 setup.`);
+  } else if (statusData.action === "EXPIRED") {
+    await sendTelegram(env, `🔴 <b>T4F WINDOW CLOSED</b>\nNo valid setup found. Wait until ${session.nextTime}.`);
+  }
+
+  // --- RUN ENGINES ---
   const t4fResult = buildT4FSignal(data, session);
   const asiaResult = buildAsiaSweepSignal(data);
   
@@ -312,8 +301,6 @@ async function scanApi(env) {
 
   for (const res of results) {
     if (res.signal !== "WAITING" && res.setupKey) {
-      const id = env.XAU_SETUP_LOCK.idFromName("xau-global-lock");
-      const stub = env.XAU_SETUP_LOCK.get(id);
       const claimRes = await stub.fetch("https://lock/claim", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: res.setupKey })
       });
@@ -341,6 +328,22 @@ export class XAUSetupLock {
   async fetch(request) {
     const url = new URL(request.url);
     const body = await request.json().catch(() => ({}));
+
+    if (url.pathname === "/check_session_status") {
+      const result = await this.ctx.storage.transaction(async tx => {
+        const lastActive = await tx.get("last_session_active") || false;
+        if (body.active && !lastActive) {
+          await tx.put("last_session_active", true);
+          return { action: "OPENED" };
+        }
+        if (!body.active && lastActive) {
+          await tx.put("last_session_active", false);
+          return { action: "EXPIRED" };
+        }
+        return { action: "NONE" };
+      });
+      return json(result);
+    }
 
     if (url.pathname === "/claim") {
       const claimed = await this.ctx.storage.transaction(async tx => {
@@ -386,11 +389,11 @@ export class XAUSetupLock {
 
           if (t.signal === "BUY") {
             if (!t.tp1Hit && price >= t.tp1) { t.tp1Hit = true; messages.push(`✅ <b>TP1 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp1}.\n👉 <b>MOVE SL TO BREAKEVEN NOW.</b>`); }
-            if (!t.tp2Hit && price >= t.tp2) { t.tp2Hit = true; messages.push(`✅ <b>TP2 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp2}. Secure more profits!`); }
+            if (!t.tp2Hit && price >= t.tp2) { t.tp2Hit = true; messages.push(`✅ <b>TP2 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp2}. Secure profits!`); }
             if (!t.tp3Hit && price >= t.tp3) { t.tp3Hit = true; t.closed = true; messages.push(`🏆 <b>TP3 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp3}.\n👉 <b>TAKE ALL PROFIT. CLOSE TRADE.</b>`); }
           } else if (t.signal === "SELL") {
             if (!t.tp1Hit && price <= t.tp1) { t.tp1Hit = true; messages.push(`✅ <b>TP1 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp1}.\n👉 <b>MOVE SL TO BREAKEVEN NOW.</b>`); }
-            if (!t.tp2Hit && price <= t.tp2) { t.tp2Hit = true; messages.push(`✅ <b>TP2 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp2}. Secure more profits!`); }
+            if (!t.tp2Hit && price <= t.tp2) { t.tp2Hit = true; messages.push(`✅ <b>TP2 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp2}. Secure profits!`); }
             if (!t.tp3Hit && price <= t.tp3) { t.tp3Hit = true; t.closed = true; messages.push(`🏆 <b>TP3 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp3}.\n👉 <b>TAKE ALL PROFIT. CLOSE TRADE.</b>`); }
           }
         }
