@@ -11,7 +11,7 @@ const T4F_WINDOWS = [
   { start: 14 * 60 + 45, end: 15 * 60 + 8, label: "New York Window" }
 ];
 
-const INTERVAL_MS = { "1min": 60_000, "15min": 900_000, "1h": 3_600_000 };
+const INTERVAL_MS = { "1min": 60_000, "5min": 300_000, "15min": 900_000, "1h": 3_600_000 };
 const MAX_CLAIMS = 1000;
 const CLAIM_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -27,11 +27,7 @@ function errorText(error) {
 
 function lagosClock(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Africa/Lagos",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23"
+    timeZone: "Africa/Lagos", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
   }).formatToParts(date);
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
   const minutes = Number(values.hour) * 60 + Number(values.minute);
@@ -61,10 +57,7 @@ async function fetchTwelveDataCandles(env, interval, outputsize) {
   url.searchParams.set("timezone", "UTC");
   url.searchParams.set("apikey", apiKey);
 
-  const response = await fetch(url.toString(), {
-    headers: { "Accept": "application/json" },
-    signal: AbortSignal.timeout(10000)
-  });
+  const response = await fetch(url.toString(), { headers: { "Accept": "application/json" }, signal: AbortSignal.timeout(10000) });
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok || !Array.isArray(payload.values)) {
@@ -74,16 +67,9 @@ async function fetchTwelveDataCandles(env, interval, outputsize) {
   const candles = payload.values.map(row => {
     const datetime = String(row.datetime || "").replace(" ", "T");
     const time = Date.parse(datetime.endsWith("Z") ? datetime : `${datetime}Z`);
-    return {
-      time,
-      open: Number(row.open),
-      high: Number(row.high),
-      low: Number(row.low),
-      close: Number(row.close)
-    };
+    return { time, open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close) };
   }).filter(candle =>
-    Number.isFinite(candle.time) && Number.isFinite(candle.close) &&
-    candle.time + intervalMs <= Date.now() - 3000
+    Number.isFinite(candle.time) && Number.isFinite(candle.close) && candle.time + intervalMs <= Date.now() - 3000
   ).sort((a, b) => a.time - b.time);
 
   const value = { symbol: payload.meta?.symbol || "XAU/USD", candles };
@@ -122,8 +108,7 @@ function digitalRootOffset(price) {
 function getExtreme(candles, field) {
   let index = 0;
   for (let i = 1; i < candles.length; i++) {
-    if ((field === "high" && candles[i][field] > candles[index][field]) ||
-        (field === "low" && candles[i][field] < candles[index][field])) index = i;
+    if ((field === "high" && candles[i][field] > candles[index][field]) || (field === "low" && candles[i][field] < candles[index][field])) index = i;
   }
   return { value: candles[index][field], time: candles[index].time };
 }
@@ -132,7 +117,10 @@ function round2(value) {
   return Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
 }
 
-function buildSignal(data, session) {
+// ==========================================
+// ENGINE 1: T4F TRAP & LIMIT
+// ==========================================
+function buildT4FSignal(data, session) {
   const { m1, m15, h1 } = data;
   const closedM15 = m15[m15.length - 1];
   const previousM1 = m1[m1.length - 2];
@@ -146,7 +134,6 @@ function buildSignal(data, session) {
   const h1Close = h1[h1.length - 1].close;
   const price = closedM15.close;
 
-  // T4F Logic
   const bias = closedM15.close > closedM15.open ? "SELL" : "BUY";
   const macroBull = h1Close > h1Ema50;
   const macroBear = h1Close < h1Ema50;
@@ -161,124 +148,192 @@ function buildSignal(data, session) {
   
   const signalAllowed = session.active && macroAligned && nearLevel && m1Confirmed;
 
-  let signal = "WAITING";
-  let entry = null, stopLoss = null, takeProfit = null, setupKey = null, reason = "No valid T4F setup.";
+  let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "No setup.";
 
   if (!session.active) {
-    reason = "Outside T4F windows (08:03-08:12 or 14:45-15:08).";
+    reason = "Outside T4F windows.";
   } else if (!macroAligned) {
-    reason = "H1 EMA 50 trend filter does not agree with M15 bias.";
+    reason = "H1 EMA 50 trend filter does not agree.";
   } else if (!nearLevel) {
-    reason = "Price is >$5 away from the 369 level.";
+    reason = "Price >$5 away from level.";
   } else if (!m1Confirmed) {
-    reason = "Awaiting 1M candle confirmation.";
+    reason = "Awaiting 1M confirmation.";
   } else if (signalAllowed) {
     signal = bias;
     entry = level;
-
     if (bias === "SELL") {
       stopLoss = recentHigh.value + 1.50;
       const risk = stopLoss - entry;
-      takeProfit = entry - risk * 3;
-      setupKey = `T4F|SELL|${recentHigh.time}|${entry.toFixed(2)}|${stopLoss.toFixed(2)}`;
+      tp1 = entry - risk;
+      tp2 = entry - (risk * 2);
+      tp3 = entry - (risk * 3);
+      setupKey = `T4F|SELL|${recentHigh.time}|${entry.toFixed(2)}`;
     } else {
       stopLoss = recentLow.value - 1.50;
       const risk = entry - stopLoss;
-      takeProfit = entry + risk * 3;
-      setupKey = `T4F|BUY|${recentLow.time}|${entry.toFixed(2)}|${stopLoss.toFixed(2)}`;
+      tp1 = entry + risk;
+      tp2 = entry + (risk * 2);
+      tp3 = entry + (risk * 3);
+      setupKey = `T4F|BUY|${recentLow.time}|${entry.toFixed(2)}`;
     }
-    reason = "All T4F conditions confirmed.";
+    reason = "T4F conditions met.";
   }
 
-  return {
-    signal,
-    entry: round2(entry),
-    stopLoss: round2(stopLoss),
-    takeProfit: round2(takeProfit),
-    setupKey,
-    reason,
-    candleTime: new Date(closedM15.time).toISOString(),
-  };
+  return { engine: "1 (T4F SNIPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
 }
 
-async function claimUnique(env, key) {
-  if (!env.XAU_SETUP_LOCK) return { claimed: true };
-  const id = env.XAU_SETUP_LOCK.idFromName("xau-global-lock");
-  const stub = env.XAU_SETUP_LOCK.get(id);
-  const response = await stub.fetch("https://lock/claim", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key })
-  });
-  return response.json();
+// ==========================================
+// ENGINE 2: ASIA SESSION SWEEP
+// ==========================================
+function buildAsiaSweepSignal(data) {
+  const { m15 } = data;
+  let asiaHigh = -Infinity, asiaLow = Infinity, asiaFound = false;
+  
+  for (let i = m15.length - 1; i >= m15.length - 80; i--) {
+    const candleTime = new Date(m15[i].time);
+    const utcHour = candleTime.getUTCHours();
+    if (utcHour >= 0 && utcHour < 9) {
+      asiaHigh = Math.max(asiaHigh, m15[i].high);
+      asiaLow = Math.min(asiaLow, m15[i].low);
+      asiaFound = true;
+    } else if (asiaFound) {
+      break;
+    }
+  }
+
+  if (!asiaFound) return { engine: "2 (ASIA SWEEP)", signal: "WAITING", reason: "No Asia session found." };
+
+  const currentCandle = m15[m15.length - 1];
+  const prevCandle = m15[m15.length - 2];
+  const closes = m15.map(c => c.close);
+  const ema200 = ema(closes, 200);
+  const isBullishTrend = currentCandle.close > ema200;
+
+  let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "Waiting for Asia Sweep.";
+
+  if (currentCandle.high > asiaHigh && currentCandle.close < asiaHigh && !isBullishTrend) {
+    if (currentCandle.close < prevCandle.low) {
+      signal = "SELL";
+      entry = currentCandle.close;
+      stopLoss = currentCandle.high + 0.5;
+      const risk = stopLoss - entry;
+      tp1 = entry - risk;
+      tp2 = entry - (risk * 1.5);
+      tp3 = asiaLow;
+      setupKey = `ASIA|SELL|${currentCandle.time}`;
+      reason = "Asia High Swept + CHoCH.";
+    }
+  }
+
+  if (currentCandle.low < asiaLow && currentCandle.close > asiaLow && isBullishTrend) {
+    if (currentCandle.close > prevCandle.high) {
+      signal = "BUY";
+      entry = currentCandle.close;
+      stopLoss = currentCandle.low - 0.5;
+      const risk = entry - stopLoss;
+      tp1 = entry + risk;
+      tp2 = entry + (risk * 1.5);
+      tp3 = asiaHigh;
+      setupKey = `ASIA|BUY|${currentCandle.time}`;
+      reason = "Asia Low Swept + CHoCH.";
+    }
+  }
+
+  return { engine: "2 (ASIA SWEEP)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
 }
 
+// ==========================================
+// TELEGRAM & TRADE TRACKER
+// ==========================================
 async function sendTelegram(env, text) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const chatId = env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) return { sent: false, status: "NOT_CONFIGURED" };
-
-  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    })
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true })
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload.ok === false) throw new Error(payload.description);
-  return { sent: true, status: "SENT" };
 }
 
-function telegramSignalText(signal) {
+async function checkActiveTrades(env, currentPrice) {
+  if (!env.XAU_SETUP_LOCK) return;
+  const id = env.XAU_SETUP_LOCK.idFromName("xau-global-lock");
+  const stub = env.XAU_SETUP_LOCK.get(id);
+  const response = await stub.fetch("https://lock/check_trades", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ price: currentPrice })
+  });
+  const data = await response.json();
+  if (data.messages && data.messages.length > 0) {
+    for (const msg of data.messages) await sendTelegram(env, msg);
+  }
+}
+
+async function registerTrade(env, signal) {
+  if (!env.XAU_SETUP_LOCK) return;
+  const id = env.XAU_SETUP_LOCK.idFromName("xau-global-lock");
+  const stub = env.XAU_SETUP_LOCK.get(id);
+  await stub.fetch("https://lock/register_trade", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(signal)
+  });
+}
+
+function telegramText(signal) {
   return [
-    `<b>⚜️ T4F GOLD TERMINAL ⚜️</b>`,
+    `<b>⚜️ TWIN ENGINE BOT ⚜️</b>`,
+    `<b>[${signal.engine}]</b>`,
     `<b>${signal.signal} LIMIT ORDER</b>`,
     ``,
     `Pair: XAUUSD`,
     `Entry: <code>${signal.entry.toFixed(2)}</code>`,
     `SL: <code>${signal.stopLoss.toFixed(2)}</code>`,
-    `TP: <code>${signal.takeProfit.toFixed(2)}</code>`,
-    `R:R Ratio: 1:3`,
+    `TP1: <code>${signal.tp1.toFixed(2)}</code>`,
+    `TP2: <code>${signal.tp2.toFixed(2)}</code>`,
+    `TP3: <code>${signal.tp3.toFixed(2)}</code>`,
     ``,
     `<b>Execution:</b>`,
     `🟩 Standard: 0.01 Lots`,
     `🟨 Cent: 1.00 Lots`,
-    ``,
-    `Setup: 369 Math + Trap SL`,
-    `Time: ${signal.candleTime}`
+    `🎯 <b>When TP1 hits, move SL to Breakeven (BE).</b>`
   ].join("\n");
 }
 
 async function scanApi(env) {
   const session = lagosClock();
   const data = await getGoldCandles(env);
-  const result = buildSignal(data, session);
-  let telegram = { sent: false, status: "NO_NEW_SIGNAL" };
+  const currentPrice = data.m1[data.m1.length - 1].close;
+  
+  await checkActiveTrades(env, currentPrice);
 
-  if (result.signal !== "WAITING" && result.setupKey) {
-    const claim = await claimUnique(env, result.setupKey);
-    if (claim.claimed) {
-      try {
-        telegram = await sendTelegram(env, telegramSignalText(result));
-      } catch (e) {
-        telegram = { sent: false, status: "FAILED" };
+  const t4fResult = buildT4FSignal(data, session);
+  const asiaResult = buildAsiaSweepSignal(data);
+  
+  const results = [t4fResult, asiaResult];
+  const alertsSent = [];
+
+  for (const res of results) {
+    if (res.signal !== "WAITING" && res.setupKey) {
+      const id = env.XAU_SETUP_LOCK.idFromName("xau-global-lock");
+      const stub = env.XAU_SETUP_LOCK.get(id);
+      const claimRes = await stub.fetch("https://lock/claim", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: res.setupKey })
+      });
+      const claim = await claimRes.json();
+
+      if (claim.claimed) {
+        try {
+          await sendTelegram(env, telegramText(res));
+          await registerTrade(env, res);
+          alertsSent.push({ engine: res.engine, status: "SENT" });
+        } catch (e) {
+          alertsSent.push({ engine: res.engine, status: "FAILED" });
+        }
+      } else {
+        alertsSent.push({ engine: res.engine, status: "DUPLICATE" });
       }
-    } else {
-      telegram = { sent: false, status: "DUPLICATE_SUPPRESSED" };
     }
   }
 
-  return {
-    ok: true,
-    price: round2(data.m1[data.m1.length - 1].close),
-    session,
-    signal: result,
-    telegram,
-  };
+  return { ok: true, price: round2(currentPrice), session, engines: { t4f: t4fResult, asia: asiaResult }, telegram: alertsSent };
 }
 
 export class XAUSetupLock {
@@ -286,6 +341,7 @@ export class XAUSetupLock {
   async fetch(request) {
     const url = new URL(request.url);
     const body = await request.json().catch(() => ({}));
+
     if (url.pathname === "/claim") {
       const claimed = await this.ctx.storage.transaction(async tx => {
         const now = Date.now();
@@ -298,6 +354,53 @@ export class XAUSetupLock {
       });
       return json({ ok: true, claimed });
     }
+
+    if (url.pathname === "/register_trade") {
+      await this.ctx.storage.transaction(async tx => {
+        const trades = await tx.get("active_trades") || [];
+        trades.push({ ...body, tp1Hit: false, tp2Hit: false, tp3Hit: false, closed: false });
+        await tx.put("active_trades", trades);
+      });
+      return json({ ok: true });
+    }
+
+    if (url.pathname === "/check_trades") {
+      const price = body.price;
+      const messages = [];
+
+      await this.ctx.storage.transaction(async tx => {
+        let trades = await tx.get("active_trades") || [];
+        for (let i = 0; i < trades.length; i++) {
+          let t = trades[i];
+          if (t.closed) continue;
+
+          let hitSL = false;
+          if (t.signal === "BUY" && price <= t.stopLoss) hitSL = true;
+          if (t.signal === "SELL" && price >= t.stopLoss) hitSL = true;
+          
+          if (hitSL) {
+            messages.push(`❌ <b>SL HIT</b> on ${t.engine} ${t.signal}. Trade Closed.`);
+            trades[i].closed = true;
+            continue;
+          }
+
+          if (t.signal === "BUY") {
+            if (!t.tp1Hit && price >= t.tp1) { t.tp1Hit = true; messages.push(`✅ <b>TP1 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp1}.\n👉 <b>MOVE SL TO BREAKEVEN NOW.</b>`); }
+            if (!t.tp2Hit && price >= t.tp2) { t.tp2Hit = true; messages.push(`✅ <b>TP2 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp2}. Secure more profits!`); }
+            if (!t.tp3Hit && price >= t.tp3) { t.tp3Hit = true; t.closed = true; messages.push(`🏆 <b>TP3 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp3}.\n👉 <b>TAKE ALL PROFIT. CLOSE TRADE.</b>`); }
+          } else if (t.signal === "SELL") {
+            if (!t.tp1Hit && price <= t.tp1) { t.tp1Hit = true; messages.push(`✅ <b>TP1 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp1}.\n👉 <b>MOVE SL TO BREAKEVEN NOW.</b>`); }
+            if (!t.tp2Hit && price <= t.tp2) { t.tp2Hit = true; messages.push(`✅ <b>TP2 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp2}. Secure more profits!`); }
+            if (!t.tp3Hit && price <= t.tp3) { t.tp3Hit = true; t.closed = true; messages.push(`🏆 <b>TP3 HIT</b> on ${t.engine} ${t.signal} @ ${t.tp3}.\n👉 <b>TAKE ALL PROFIT. CLOSE TRADE.</b>`); }
+          }
+        }
+        trades = trades.filter(t => !t.closed);
+        await tx.put("active_trades", trades);
+      });
+
+      return json({ ok: true, messages });
+    }
+
     return json({ ok: false }, 404);
   }
 }
@@ -316,6 +419,6 @@ export default {
     }
 
     if (env.ASSETS) return env.ASSETS.fetch(request);
-    return new Response("Worker is running", { status: 200 });
+    return new Response("Twin Engine Worker is running", { status: 200 });
   }
 };
