@@ -134,7 +134,6 @@ function round2(value) {
   return Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
 }
 
-// ENGINE 1: T4F (With Ready State)
 function buildT4FSignal(data, session) {
   const { m1, m15, h1 } = data;
   const closedM15 = m15[m15.length - 1];
@@ -162,7 +161,7 @@ function buildT4FSignal(data, session) {
   const m1Confirmed = bias === "SELL" ? latestM1.close < previousM1.open : latestM1.close > previousM1.open;
   
   const signalAllowed = session.active && macroAligned && nearLevel && m1Confirmed;
-  const isReady = session.active && macroAligned && nearLevel && !m1Confirmed; // Forming setup
+  const isReady = session.active && macroAligned && nearLevel && !m1Confirmed;
 
   let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "No setup.";
 
@@ -186,7 +185,6 @@ function buildT4FSignal(data, session) {
   return { engine: "1 (T4F SNIPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason, isReady };
 }
 
-// ENGINE 2: ASIA SWEEP (With Ready State)
 function buildAsiaSweepSignal(data) {
   const { m15 } = data;
   let asiaHigh = -Infinity, asiaLow = Infinity, asiaFound = false;
@@ -234,7 +232,6 @@ function buildAsiaSweepSignal(data) {
   return { engine: "2 (ASIA SWEEP)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason, isReady };
 }
 
-// ENGINE 3: M5 SCALPER (With Ready State)
 function buildScalperSignal(data) {
   const { m5 } = data;
   const closes = m5.map(c => c.close);
@@ -296,15 +293,16 @@ function buildScalperSignal(data) {
   return { engine: "3 (M5 SCALPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason, rules, isReady };
 }
 
-// TELEGRAM FUNCTIONS
 async function sendTelegram(env, text) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const chatId = env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) return { sent: false, status: "NOT_CONFIGURED" };
-  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true })
   });
+  const payload = await res.json();
+  return { sent: true, status: "SENT", response: payload };
 }
 
 async function checkActiveTrades(env, currentPrice) {
@@ -390,7 +388,7 @@ async function scanApi(env) {
           await registerTrade(env, res);
           alertsSent.push({ engine: res.engine, status: "SENT" });
         } catch (e) {
-          alertsSent.push({ engine: res.engine, status: "FAILED" });
+          alertsSent.push({ engine: res.engine, status: "FAILED", error: errorText(e) });
         }
       }
     } else if (res.isReady) {
@@ -498,6 +496,16 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: JSON_HEADERS });
+
+    // --- NEW TEST TELEGRAM ROUTE ---
+    if (url.pathname === "/api/test-telegram" && request.method === "GET") {
+        try {
+            const result = await sendTelegram(env, `🧪 <b>TEST MESSAGE</b>\n\nIf you see this, your Telegram Bot Token and Chat ID are 100% correct and working!`);
+            return json({ ok: true, telegram: result });
+        } catch (error) {
+            return json({ ok: false, error: errorText(error) }, 502);
+        }
+    }
 
     if (url.pathname === "/api/scan" && request.method === "GET") {
       try {
