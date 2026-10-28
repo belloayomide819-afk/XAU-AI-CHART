@@ -106,11 +106,7 @@ function atr(candles, period) {
   if (candles.length < period) return 1.0;
   let sum = 0;
   for (let i = candles.length - period; i < candles.length; i++) {
-    const tr = Math.max(
-      candles[i].high - candles[i].low,
-      Math.abs(candles[i].high - candles[i-1].close),
-      Math.abs(candles[i].low - candles[i-1].close)
-    );
+    const tr = Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i-1].close), Math.abs(candles[i].low - candles[i-1].close));
     sum += tr;
   }
   return sum / period;
@@ -138,9 +134,7 @@ function round2(value) {
   return Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
 }
 
-// ==========================================
-// ENGINE 1: T4F TRAP & LIMIT
-// ==========================================
+// ENGINE 1: T4F (With Ready State)
 function buildT4FSignal(data, session) {
   const { m1, m15, h1 } = data;
   const closedM15 = m15[m15.length - 1];
@@ -168,6 +162,7 @@ function buildT4FSignal(data, session) {
   const m1Confirmed = bias === "SELL" ? latestM1.close < previousM1.open : latestM1.close > previousM1.open;
   
   const signalAllowed = session.active && macroAligned && nearLevel && m1Confirmed;
+  const isReady = session.active && macroAligned && nearLevel && !m1Confirmed; // Forming setup
 
   let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "No setup.";
 
@@ -188,12 +183,10 @@ function buildT4FSignal(data, session) {
     }
     reason = "T4F conditions met.";
   }
-  return { engine: "1 (T4F SNIPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
+  return { engine: "1 (T4F SNIPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason, isReady };
 }
 
-// ==========================================
-// ENGINE 2: ASIA SESSION SWEEP
-// ==========================================
+// ENGINE 2: ASIA SWEEP (With Ready State)
 function buildAsiaSweepSignal(data) {
   const { m15 } = data;
   let asiaHigh = -Infinity, asiaLow = Infinity, asiaFound = false;
@@ -206,7 +199,7 @@ function buildAsiaSweepSignal(data) {
       asiaFound = true;
     } else if (asiaFound) break;
   }
-  if (!asiaFound) return { engine: "2 (ASIA SWEEP)", signal: "WAITING", reason: "No Asia session found." };
+  if (!asiaFound) return { engine: "2 (ASIA SWEEP)", signal: "WAITING", reason: "No Asia session found.", isReady: false };
 
   const currentCandle = m15[m15.length - 1];
   const prevCandle = m15[m15.length - 2];
@@ -215,37 +208,40 @@ function buildAsiaSweepSignal(data) {
   const isBullishTrend = currentCandle.close > ema200;
 
   let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "Waiting for Asia Sweep.";
+  let isReady = false;
 
-  if (currentCandle.high > asiaHigh && currentCandle.close < asiaHigh && !isBullishTrend) {
-    if (currentCandle.close < prevCandle.low) {
-      signal = "SELL"; entry = currentCandle.close; stopLoss = currentCandle.high + 0.5;
-      const risk = stopLoss - entry; tp1 = entry - risk; tp2 = entry - (risk * 1.5); tp3 = asiaLow;
-      setupKey = `ASIA|SELL|${currentCandle.time}`; reason = "Asia High Swept + CHoCH.";
-    }
+  if (currentCandle.high > asiaHigh && currentCandle.close < asiaHigh && !isBullishTrend && currentCandle.close >= prevCandle.low) {
+      isReady = true;
+      reason = "Asia High Swept. Awaiting CHoCH.";
   }
-  if (currentCandle.low < asiaLow && currentCandle.close > asiaLow && isBullishTrend) {
-    if (currentCandle.close > prevCandle.high) {
-      signal = "BUY"; entry = currentCandle.close; stopLoss = currentCandle.low - 0.5;
-      const risk = entry - stopLoss; tp1 = entry + risk; tp2 = entry + (risk * 1.5); tp3 = asiaHigh;
-      setupKey = `ASIA|BUY|${currentCandle.time}`; reason = "Asia Low Swept + CHoCH.";
-    }
+  if (currentCandle.low < asiaLow && currentCandle.close > asiaLow && isBullishTrend && currentCandle.close <= prevCandle.high) {
+      isReady = true;
+      reason = "Asia Low Swept. Awaiting CHoCH.";
   }
-  return { engine: "2 (ASIA SWEEP)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
+
+  if (currentCandle.high > asiaHigh && currentCandle.close < asiaHigh && !isBullishTrend && currentCandle.close < prevCandle.low) {
+    signal = "SELL"; entry = currentCandle.close; stopLoss = currentCandle.high + 0.5;
+    const risk = stopLoss - entry; tp1 = entry - risk; tp2 = entry - (risk * 1.5); tp3 = asiaLow;
+    setupKey = `ASIA|SELL|${currentCandle.time}`; reason = "Asia High Swept + CHoCH.";
+    isReady = false;
+  }
+  if (currentCandle.low < asiaLow && currentCandle.close > asiaLow && isBullishTrend && currentCandle.close > prevCandle.high) {
+    signal = "BUY"; entry = currentCandle.close; stopLoss = currentCandle.low - 0.5;
+    const risk = entry - stopLoss; tp1 = entry + risk; tp2 = entry + (risk * 1.5); tp3 = asiaHigh;
+    setupKey = `ASIA|BUY|${currentCandle.time}`; reason = "Asia Low Swept + CHoCH.";
+    isReady = false;
+  }
+  return { engine: "2 (ASIA SWEEP)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason, isReady };
 }
 
-// ==========================================
-// ENGINE 3: HIGH-FREQUENCY SCALPER (M5) WITH EDGE
-// ==========================================
+// ENGINE 3: M5 SCALPER (With Ready State)
 function buildScalperSignal(data) {
   const { m5 } = data;
   const closes = m5.map(c => c.close);
-  
-  // Calculate Indicators
   const ema50 = ema(closes, 50);
   const currentAtr = atr(m5, 14);
   const currentCandle = m5[m5.length - 1];
   
-  // RSI Calculation
   let gains = 0, losses = 0;
   for (let i = closes.length - 14; i < closes.length; i++) {
     const diff = closes[i] - closes[i-1];
@@ -259,40 +255,48 @@ function buildScalperSignal(data) {
   const prevRsi = 100 - (100 / (1 + ((gains - (prevDiff > 0 ? prevDiff : 0)) / ((losses + (prevDiff < 0 ? prevDiff : 0)) || 1))));
 
   let signal = "WAITING", entry = null, stopLoss = null, tp1 = null, tp2 = null, tp3 = null, setupKey = null, reason = "No Scalper setup.";
+  let isReady = false;
 
-  // Tight SL/TP for scalper
-  const slDistance = currentAtr * 1.5; // Dynamic SL based on volatility
+  const slDistance = currentAtr * 1.5; 
   const bodySize = Math.abs(currentCandle.close - currentCandle.open);
   const distanceToEma = Math.abs(currentCandle.close - ema50);
+  
+  const rules = { rsiCross: false, momentum: false, location: false };
 
-  // BUY EDGE: RSI crosses 50, Price > EMA 50, Momentum Candle (Body > 50% ATR), and NOT overextended (Distance < 2x ATR)
   if (prevRsi <= 50 && rsi > 50 && currentCandle.close > ema50) {
-    if (bodySize > (currentAtr * 0.5) && distanceToEma < (currentAtr * 2.0)) {
+    rules.rsiCross = true;
+    if (bodySize > (currentAtr * 0.5)) rules.momentum = true;
+    if (distanceToEma < (currentAtr * 2.0)) rules.location = true;
+    
+    if (rules.momentum && rules.location) {
       signal = "BUY"; entry = currentCandle.close; stopLoss = entry - slDistance;
-      tp1 = entry + (slDistance * 0.5); // Very tight TP1
-      tp2 = entry + (slDistance * 1.0);
-      tp3 = entry + (slDistance * 2.0);
-      setupKey = `SCALP|BUY|${currentCandle.time}`; 
-      reason = "M5 RSI Cross Up + Momentum + Tight Location.";
+      tp1 = entry + (slDistance * 0.5); tp2 = entry + (slDistance * 1.0); tp3 = entry + (slDistance * 2.0);
+      setupKey = `SCALP|BUY|${currentCandle.time}`; reason = "M5 RSI Cross Up + Momentum + Tight Location.";
+    } else {
+      isReady = true;
+      reason = "M5 RSI Crossed Up. Awaiting Momentum/Location.";
     }
   }
   
-  // SELL EDGE: RSI crosses 50, Price < EMA 50, Momentum Candle, and NOT overextended
   if (prevRsi >= 50 && rsi < 50 && currentCandle.close < ema50) {
-    if (bodySize > (currentAtr * 0.5) && distanceToEma < (currentAtr * 2.0)) {
+    rules.rsiCross = true;
+    if (bodySize > (currentAtr * 0.5)) rules.momentum = true;
+    if (distanceToEma < (currentAtr * 2.0)) rules.location = true;
+    
+    if (rules.momentum && rules.location) {
       signal = "SELL"; entry = currentCandle.close; stopLoss = entry + slDistance;
-      tp1 = entry - (slDistance * 0.5);
-      tp2 = entry - (slDistance * 1.0);
-      tp3 = entry - (slDistance * 2.0);
-      setupKey = `SCALP|SELL|${currentCandle.time}`; 
-      reason = "M5 RSI Cross Down + Momentum + Tight Location.";
+      tp1 = entry - (slDistance * 0.5); tp2 = entry - (slDistance * 1.0); tp3 = entry - (slDistance * 2.0);
+      setupKey = `SCALP|SELL|${currentCandle.time}`; reason = "M5 RSI Cross Down + Momentum + Tight Location.";
+    } else {
+      isReady = true;
+      reason = "M5 RSI Crossed Down. Awaiting Momentum/Location.";
     }
   }
   
-  return { engine: "3 (M5 SCALPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason };
+  return { engine: "3 (M5 SCALPER)", signal, entry: round2(entry), stopLoss: round2(stopLoss), tp1: round2(tp1), tp2: round2(tp2), tp3: round2(tp3), setupKey, reason, rules, isReady };
 }
 
-// TELEGRAM & TRADE TRACKER
+// TELEGRAM FUNCTIONS
 async function sendTelegram(env, text) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const chatId = env.TELEGRAM_CHAT_ID;
@@ -368,7 +372,7 @@ async function scanApi(env) {
 
   const t4fResult = buildT4FSignal(data, session);
   const asiaResult = buildAsiaSweepSignal(data);
-  const scalperResult = buildScalperSignal(data); // ENGINE 3
+  const scalperResult = buildScalperSignal(data); 
   
   const results = [t4fResult, asiaResult, scalperResult];
   const alertsSent = [];
@@ -388,8 +392,16 @@ async function scanApi(env) {
         } catch (e) {
           alertsSent.push({ engine: res.engine, status: "FAILED" });
         }
-      } else {
-        alertsSent.push({ engine: res.engine, status: "DUPLICATE" });
+      }
+    } else if (res.isReady) {
+      const readyKey = `READY|${res.engine}|${res.reason}`;
+      const claimRes = await stub.fetch("https://lock/claim", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: readyKey })
+      });
+      const claim = await claimRes.json();
+      
+      if (claim.claimed) {
+        await sendTelegram(env, `⚠️ <b>[${res.engine}] GET READY</b>\n\n${res.reason}\n\nOpen MT5 and prepare your order. Waiting for final confirmation...`);
       }
     }
   }
