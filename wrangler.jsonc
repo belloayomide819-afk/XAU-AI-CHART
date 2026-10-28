@@ -1,13 +1,7 @@
 {
   "name": "smart-recovery-bot",
   "main": "worker.js",
-  "compatibility_date": "2026-09-11",
-
-  "assets": {
-    "directory": ".",
-    "binding": "ASSETS"
-  },
-
+  "compatibility_date": "2024-01-01",
   "durable_objects": {
     "bindings": [
       {
@@ -16,11 +10,10 @@
       }
     ]
   },
-
-  "exports": {
-    "XAUSetupLock": {
-      "type": "durable-object",
-      "storage": "sqlite"
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["XAUSetupLock"]
     }
-  }
+  ]
 }
