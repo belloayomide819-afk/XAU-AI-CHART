@@ -18,7 +18,6 @@
         }
         .mono { font-family: 'JetBrains Mono', monospace; }
         
-        /* Premium Card Styling */
         .card { 
             background-color: #131722; 
             border: 1px solid #2A2E39; 
@@ -27,7 +26,6 @@
             margin-bottom: 16px;
         }
         
-        /* Headers */
         .section-label {
             font-size: 10px;
             font-weight: 600;
@@ -37,7 +35,6 @@
             margin-bottom: 12px;
         }
         
-        /* Rule Checks */
         .rule-box {
             background-color: #0B0E14;
             border: 1px solid #2A2E39;
@@ -53,11 +50,9 @@
         .rule-yellow { border-color: #F59E0B; color: #F59E0B; }
         .rule-red { border-color: #F23645; color: #F23645; }
 
-        /* Badges */
         .badge-waiting { background: #1E222D; color: #B2B5BE; padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; border: 1px solid #2A2E39;}
         .badge-active { background: rgba(8, 153, 129, 0.2); color: #089981; padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; border: 1px solid #089981;}
         
-        /* Chart Container */
         #tvchart { width: 100%; height: 350px; border-radius: 8px; overflow: hidden; background: #131722;}
     </style>
 </head>
@@ -78,7 +73,7 @@
             <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> DATA FEED CONNECTED
         </div>
         <div id="market-status" class="text-[10px] font-bold px-3 py-1.5 rounded border border-red-900 text-red-500 bg-red-900/20">
-            MARKET CLOSED
+            T4F WINDOW CLOSED
         </div>
     </div>
 
@@ -102,9 +97,7 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
     <!-- ENGINE 1: T4F -->
-    <!-- ========================================== -->
     <div class="card border-t-2 border-t-blue-500">
         <div class="flex justify-between items-center mb-4">
             <div>
@@ -146,9 +139,7 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
     <!-- ENGINE 2: ASIA SWEEP -->
-    <!-- ========================================== -->
     <div class="card border-t-2 border-t-yellow-500">
         <div class="flex justify-between items-center mb-4">
             <div>
@@ -188,9 +179,7 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
     <!-- ENGINE 3: M5 SCALPER -->
-    <!-- ========================================== -->
     <div class="card border-t-2 border-t-purple-500">
         <div class="flex justify-between items-center mb-4">
             <div>
@@ -255,20 +244,18 @@
                 const winStatus = document.getElementById('window-status');
                 
                 if (data.session.active) {
-                    mktStatus.innerText = 'MARKET OPEN';
+                    mktStatus.innerText = 'T4F WINDOW OPEN';
                     mktStatus.className = 'text-[10px] font-bold px-3 py-1.5 rounded bg-green-900/30 border border-green-900 text-green-400';
                     winStatus.innerText = 'WINDOW OPEN';
                     winStatus.className = 'text-sm font-bold text-green-500';
                 } else {
-                    mktStatus.innerText = 'MARKET CLOSED';
+                    mktStatus.innerText = 'T4F WINDOW CLOSED';
                     mktStatus.className = 'text-[10px] font-bold px-3 py-1.5 rounded bg-red-900/30 border border-red-900 text-red-400';
                     winStatus.innerText = 'WINDOW CLOSED';
                     winStatus.className = 'text-sm font-bold text-yellow-500';
                 }
 
-                // ==========================================
-                // UPDATE ENGINE 1
-                // ==========================================
+                // ENGINE 1
                 const e1 = data.engines.t4f;
                 if (e1.signal !== 'WAITING') {
                     document.getElementById('e1-status-badge').className = 'badge-active';
@@ -294,9 +281,7 @@
                     document.getElementById('e1-rule-1').innerHTML = '<span>T4F window</span> <span>OPEN</span>';
                 }
 
-                // ==========================================
-                // UPDATE ENGINE 2
-                // ==========================================
+                // ENGINE 2
                 const e2 = data.engines.asia;
                 if (e2.signal !== 'WAITING') {
                     document.getElementById('e2-status-badge').className = 'badge-active';
@@ -322,9 +307,7 @@
                     document.getElementById('e2-rule-1').innerHTML = '<span>Asia Range Swept</span> <span>YES</span>';
                 }
 
-                // ==========================================
-                // UPDATE ENGINE 3 (NEW)
-                // ==========================================
+                // ENGINE 3
                 const e3 = data.engines.scalper;
                 if (e3.signal !== 'WAITING') {
                     document.getElementById('e3-status-badge').className = 'badge-active';
@@ -342,27 +325,28 @@
                 }
                 document.getElementById('e3-reason').innerText = e3.reason;
 
-                // Update E3 Rules
-                if(e3.reason.includes('RSI')) {
-                    document.getElementById('e3-rule-1').className = 'rule-box rule-yellow justify-between';
-                    document.getElementById('e3-rule-1').innerHTML = '<span>RSI Cross (50)</span> <span>WAIT</span>';
-                } else {
+                if(e3.rules.rsiCross) {
                     document.getElementById('e3-rule-1').className = 'rule-box rule-green justify-between';
                     document.getElementById('e3-rule-1').innerHTML = '<span>RSI Cross (50)</span> <span>PASSED</span>';
-                }
-                if(e3.reason.includes('Momentum')) {
-                    document.getElementById('e3-rule-2').className = 'rule-box rule-yellow justify-between';
-                    document.getElementById('e3-rule-2').innerHTML = '<span>Momentum Candle (ATR)</span> <span>WAIT</span>';
                 } else {
+                    document.getElementById('e3-rule-1').className = 'rule-box rule-yellow justify-between';
+                    document.getElementById('e3-rule-1').innerHTML = '<span>RSI Cross (50)</span> <span>WAIT</span>';
+                }
+
+                if(e3.rules.momentum) {
                     document.getElementById('e3-rule-2').className = 'rule-box rule-green justify-between';
                     document.getElementById('e3-rule-2').innerHTML = '<span>Momentum Candle (ATR)</span> <span>PASSED</span>';
+                } else {
+                    document.getElementById('e3-rule-2').className = 'rule-box rule-yellow justify-between';
+                    document.getElementById('e3-rule-2').innerHTML = '<span>Momentum Candle (ATR)</span> <span>WAIT</span>';
                 }
-                if(e3.reason.includes('Location')) {
+
+                if(e3.rules.location) {
+                    document.getElementById('e3-rule-3').className = 'rule-box rule-green justify-between';
+                    document.getElementById('e3-rule-3').innerHTML = '<span>Location (EMA 50)</span> <span>PASSED</span>';
+                } else {
                     document.getElementById('e3-rule-3').className = 'rule-box rule-yellow justify-between';
                     document.getElementById('e3-rule-3').innerHTML = '<span>Location (EMA 50)</span> <span>WAIT</span>';
-                } else {
-                    document.getElementById('e3-rule-3').className = 'rule-box rule-green justify-between';
-                    document.getElementById('e3-rule-3').innerHTML = '<span>Location (EMA 50)</span> <span>HIT</span>';
                 }
 
             } catch (err) {
